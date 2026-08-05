@@ -1,2 +1,3 @@
+# Generated audio renders are created locally by process_audio.py.
 outputs/*.wav
 .DS_Store
