@@ -28,4 +28,4 @@ python3 process_audio.py
 
 ## Enfoque sonoro
 
-El script construye primero un balance de niveles y después aplica tratamiento específico por pista. `Evolving_Circles_RAW.wav` recibe el rol atmosférico principal con tape echo largo, oscuro y degradado; `Sharp_Chorus_RAW.wav` queda como soporte armónico reconocible; `Neon_GB_RAW.wav` actúa como base rítmica controlada mediante automatización de volumen suave para que la batería no domine.
+El script construye primero un balance de niveles y después aplica tratamiento específico por pista. `Evolving_Circles_RAW.wav` recibe el rol atmosférico principal con tape echo largo, oscuro y degradado; `Sharp_Chorus_RAW.wav` queda como soporte armónico reconocible; `Neon_GB_RAW.wav` actúa como base rítmica centrada, elevada +3 dB respecto a la mezcla anterior y sin automatización RMS.
