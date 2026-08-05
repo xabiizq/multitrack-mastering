@@ -285,9 +285,9 @@ def main():
     highpass(sharp, sr, 42); shelf_cut(sharp, sr, 260, 0.18); lowpass_inplace(sharp, sr, 7600)
     soft_saturate(sharp, 1.055); gain_pan(sharp, -6.2, -0.23)
 
-    # Neon GB: rhythmic bed.  Fader automation controls active drum passages before tone/level.
-    automate_neon(neon, sr); highpass(neon, sr, 27); shelf_cut(neon, sr, 92, 0.05); lowpass_inplace(neon, sr, 9800)
-    soft_saturate(neon, 1.025); gain_pan(neon, -1.2, 0.00)
+    # Neon GB: rhythmic bed. No RMS-driven fader riding; keep musical level steady.
+    highpass(neon, sr, 27); shelf_cut(neon, sr, 92, 0.05); lowpass_inplace(neon, sr, 9800)
+    soft_saturate(neon, 1.025); gain_pan(neon, 1.8, 0.00)
 
     mix = [array("f", [0.0]) * n, array("f", [0.0]) * n]
     for tr in (evolving, sharp, neon):
@@ -347,7 +347,7 @@ def render_report(pre, mix_a, master_a, mono_peak):
 
 1. Primero se fijó una mezcla de niveles: Evolving como plano principal, Sharp Chorus detrás como colchón armónico y Neon GB como base integrada.
 2. Se eliminó cualquier comportamiento que pudiera percibirse como fade out a mitad del tema: no hay automatización global dependiente de RMS ni reducción de nivel por secciones tranquilas. El único fade programado es el fade final de 2 segundos al final real del archivo.
-3. `Neon_GB_RAW.wav` se subió exactamente +3 dB respecto a la revisión anterior, de -4.2 dB a -1.2 dB, conservando transitorios y sin compensarlo con limitación adicional.
+3. `Neon_GB_RAW.wav` se subió exactamente +3 dB respecto a la mezcla actual, de -1.2 dB a +1.8 dB, conservando transitorios, eliminando la automatización por RMS y sin compensarlo con limitación adicional.
 4. El panorama separa ligeramente las dos guitarras: Sharp Chorus queda 23% izquierda, Evolving Circles 23% derecha y Neon GB permanece centrado para liberar el centro rítmico. La compatibilidad mono se comprobó mediante correlación y pico mono.
 
 ## Procesamiento por pista
@@ -356,7 +356,7 @@ def render_report(pre, mix_a, master_a, mono_peak):
 |---|---|---|---|---|---|
 | Evolving Circles | -1.6 dB, 23% derecha | HP 32 Hz, recorte suave bajo 145 Hz, LP 11.8 kHz | Sin compresor | `tanh` leve tipo cinta/consola | Tape echo 430 ms con wow/flutter, feedback 0.34, filtrado a 2.75 kHz y cámara oscura |
 | Sharp Chorus | -6.2 dB, 23% izquierda | HP 42 Hz, recorte bajo 260 Hz, LP 7.6 kHz | Sin compresor | Saturación un poco más cálida | Cámara secundaria muy baja |
-| Neon GB | -1.2 dB, centro | HP 27 Hz, recorte bajo 92 Hz, LP 9.8 kHz | Automatización de ganancia, no compresión | Saturación mínima | Sin reverb dedicada para mantener base firme |
+| Neon GB | +1.8 dB, centro | HP 27 Hz, recorte bajo 92 Hz, LP 9.8 kHz | Sin automatización RMS ni compresión | Saturación mínima | Sin reverb dedicada para mantener base firme |
 
 ## Bus master y mastering
 

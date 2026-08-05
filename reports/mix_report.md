@@ -19,7 +19,7 @@
 
 1. Primero se fijó una mezcla de niveles: Evolving como plano principal, Sharp Chorus detrás como colchón armónico y Neon GB como base integrada.
 2. Se eliminó cualquier comportamiento que pudiera percibirse como fade out a mitad del tema: no hay automatización global dependiente de RMS ni reducción de nivel por secciones tranquilas. El único fade programado es el fade final de 2 segundos al final real del archivo.
-3. `Neon_GB_RAW.wav` se subió exactamente +3 dB respecto a la revisión anterior, de -4.2 dB a -1.2 dB, conservando transitorios y sin compensarlo con limitación adicional.
+3. `Neon_GB_RAW.wav` se subió exactamente +3 dB respecto a la mezcla actual, de -1.2 dB a +1.8 dB, conservando transitorios, eliminando la automatización por RMS y sin compensarlo con limitación adicional.
 4. El panorama separa ligeramente las dos guitarras: Sharp Chorus queda 23% izquierda, Evolving Circles 23% derecha y Neon GB permanece centrado para liberar el centro rítmico. La compatibilidad mono se comprobó mediante correlación y pico mono.
 
 ## Procesamiento por pista
@@ -28,7 +28,7 @@
 |---|---|---|---|---|---|
 | Evolving Circles | -1.6 dB, 23% derecha | HP 32 Hz, recorte suave bajo 145 Hz, LP 11.8 kHz | Sin compresor | `tanh` leve tipo cinta/consola | Tape echo 430 ms con wow/flutter, feedback 0.34, filtrado a 2.75 kHz y cámara oscura |
 | Sharp Chorus | -6.2 dB, 23% izquierda | HP 42 Hz, recorte bajo 260 Hz, LP 7.6 kHz | Sin compresor | Saturación un poco más cálida | Cámara secundaria muy baja |
-| Neon GB | -1.2 dB, centro | HP 27 Hz, recorte bajo 92 Hz, LP 9.8 kHz | Automatización de ganancia, no compresión | Saturación mínima | Sin reverb dedicada para mantener base firme |
+| Neon GB | +1.8 dB, centro | HP 27 Hz, recorte bajo 92 Hz, LP 9.8 kHz | Sin automatización RMS ni compresión | Saturación mínima | Sin reverb dedicada para mantener base firme |
 
 ## Bus master y mastering
 
@@ -40,8 +40,8 @@
 
 | Archivo | Duración | Peak dBFS | RMS dBFS | LUFS aprox. | Crest dB | Corr. L/R | Pico mono dBFS | Graves/medios bajos/medios/agudos dB |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| outputs/mix.wav | 141.31s | -3.20 | -6.51 | -7.21 | 3.31 | 1.00 | n/a | -6.5/-32.6/-42.1/-105.6 |
-| outputs/master.wav | 141.31s | -12.43 | -15.70 | -16.40 | 3.27 | 1.00 | -12.43 | -15.7/-40.6/-50.1/-113.7 |
+| outputs/mix.wav | 141.31s | -3.20 | -6.51 | -7.21 | 3.31 | 1.00 | n/a | -6.5/-32.3/-41.9/-105.5 |
+| outputs/master.wav | 141.31s | -12.43 | -15.70 | -16.40 | 3.27 | 1.00 | -12.43 | -15.7/-40.3/-49.9/-113.5 |
 
 ## Notas de reproducibilidad
 
