@@ -13,25 +13,26 @@
 
 - `Evolving_Circles_RAW.wav`: elemento atmosférico principal. La pista contiene energía sostenida, estéreo moderado y pocos transitorios bruscos; pedía profundidad y un eco de cinta audible. Se recortó subgrave no musical, se suavizó el extremo superior y se convirtió en la fuente principal de tape echo más cámara oscura.
 - `Sharp_Chorus_RAW.wav`: soporte armónico. Es más débil en nivel y necesita reconocimiento sin ocupar el primer plano. Se adelgazó la zona baja/media-baja para no enmascarar a Evolving Circles ni a la base.
-- `Neon_GB_RAW.wav`: base rítmica. Presenta mayor actividad transitoria y podía dominar la mezcla si se subía en exceso. Se aplicó automatización de fader por bloques para controlar pasajes fuertes antes de cualquier saturación.
+- `Neon_GB_RAW.wav`: base rítmica. Presenta mayor actividad transitoria y podía dominar la mezcla si se subía en exceso. Se elevó exactamente +3 dB respecto a la mezcla anterior, sin automatización RMS ni compresión agresiva, para conservar transitorios y dinámica.
 
 ## Balance, panorama y automatización
 
 1. Primero se fijó una mezcla de niveles: Evolving como plano principal, Sharp Chorus detrás como colchón armónico y Neon GB como base integrada.
-2. La automatización se aplicó únicamente a `Neon_GB_RAW.wav`, con reducciones suaves de hasta aproximadamente 2.2 dB en bloques rítmicamente más densos. Esto evita que la batería domine sin usar compresión agresiva.
-3. El panorama es natural y moderado: Evolving apenas hacia la izquierda, Sharp Chorus apenas hacia la derecha y Neon GB prácticamente centrado. La compatibilidad mono se comprobó mediante correlación y pico mono.
+2. Se eliminó la automatización dependiente de RMS que podía crear una caída de volumen no deseada aproximadamente a mitad de canción. Ninguna sección tranquila se interpreta como final: solo se aplica un fade global durante los últimos 2 segundos del render.
+3. `Neon_GB_RAW.wav` queda exactamente +3 dB por encima del nivel anterior (-1.2 dB frente a -4.2 dB), manteniendo transitorios y dinámica sin compensarlo con más limitación ni compresión agresiva.
+4. El panorama es suave y mono-compatible: Sharp Chorus 23% a la izquierda, Evolving Circles 23% a la derecha y Neon GB estable en el centro. El tape echo atmosférico de Evolving Circles se conserva.
 
 ## Procesamiento por pista
 
 | Pista | Nivel/pan | EQ | Dinámica | Saturación/color | Espacio |
 |---|---|---|---|---|---|
-| Evolving Circles | -1.6 dB, 10% izquierda | HP 32 Hz, recorte suave bajo 145 Hz, LP 11.8 kHz | Sin compresor | `tanh` leve tipo cinta/consola | Tape echo 430 ms con wow/flutter, feedback 0.34, filtrado a 2.75 kHz y cámara oscura |
-| Sharp Chorus | -6.2 dB, 8% derecha | HP 42 Hz, recorte bajo 260 Hz, LP 7.6 kHz | Sin compresor | Saturación un poco más cálida | Cámara secundaria muy baja |
-| Neon GB | -4.2 dB, casi centro | HP 27 Hz, recorte bajo 92 Hz, LP 9.8 kHz | Automatización de ganancia, no compresión | Saturación mínima | Sin reverb dedicada para mantener base firme |
+| Evolving Circles | -1.6 dB, 23% derecha | HP 32 Hz, recorte suave bajo 145 Hz, LP 11.8 kHz | Sin compresor | `tanh` leve tipo cinta/consola | Tape echo 430 ms con wow/flutter, feedback 0.34, filtrado a 2.75 kHz y cámara oscura |
+| Sharp Chorus | -6.2 dB, 23% izquierda | HP 42 Hz, recorte bajo 260 Hz, LP 7.6 kHz | Sin compresor | Saturación un poco más cálida | Cámara secundaria muy baja |
+| Neon GB | -1.2 dB, centro | HP 27 Hz, recorte bajo 92 Hz, LP 9.8 kHz | Sin automatización RMS ni compresión | Saturación mínima | Sin reverb dedicada para mantener base firme |
 
 ## Bus master y mastering
 
-- Bus de mezcla: saturación de consola/cinta muy ligera y normalización conservadora a -3.2 dBFS de pico de muestra.
+- Bus de mezcla: saturación de consola/cinta muy ligera, normalización conservadora a -3.2 dBFS de pico de muestra y fade global únicamente en los últimos 2 segundos.
 - Master: filtrado superior suave a 15.5 kHz, saturación mínima y ganancia final con techo de -1.0 dBFS como aproximación conservadora a -1 dBTP.
 - No se usó limitación moderna ni compresión glue evidente porque el objetivo era dinámica, textura y profundidad de finales de los 60.
 
@@ -39,8 +40,8 @@
 
 | Archivo | Duración | Peak dBFS | RMS dBFS | LUFS aprox. | Crest dB | Corr. L/R | Pico mono dBFS | Graves/medios bajos/medios/agudos dB |
 |---|---:|---:|---:|---:|---:|---:|---:|---:|
-| outputs/mix.wav | 141.31s | -3.20 | -6.42 | -7.12 | 3.22 | 1.00 | n/a | -6.4/-32.7/-42.0/-105.6 |
-| outputs/master.wav | 141.31s | -12.51 | -15.70 | -16.40 | 3.19 | 1.00 | -12.51 | -15.7/-40.8/-50.1/-113.7 |
+| outputs/mix.wav | 141.31s | -3.20 | -6.51 | -7.21 | 3.31 | 1.00 | n/a | -6.5/-32.6/-42.1/-105.6 |
+| outputs/master.wav | 141.31s | -12.43 | -15.70 | -16.40 | 3.27 | 1.00 | -12.43 | -15.7/-40.6/-50.1/-113.7 |
 
 ## Notas de reproducibilidad
 

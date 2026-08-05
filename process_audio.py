@@ -19,6 +19,7 @@ INPUTS = {
 }
 OUT = Path("outputs")
 REPORTS = Path("reports")
+GENERATED_WAVS = (OUT / "mix.wav", OUT / "master.wav")
 
 
 def db(x: float) -> float:
@@ -179,27 +180,18 @@ def gain_pan(chans, gain_db: float, pan: float):
         chans[1][i] = (mid - side) * rg * 1.38
 
 
-def automate_neon(chans, sr):
-    # Gentle manual-style fader riding: louder rhythmic passages are eased back,
-    # but not flattened by a compressor.
-    win = int(sr * 0.25); n = len(chans[0]); env = array("f", [1.0]) * n
-    vals = []
-    for start in range(0, n, win):
-        end = min(n, start + win)
-        block = math.sqrt(sum(((chans[0][i] + chans[1][i]) * 0.5) ** 2 for i in range(start, end)) / max(1, end - start))
-        vals.append(block)
-    avg = sum(vals) / len(vals)
-    for b, val in enumerate(vals):
-        over = max(0.0, db(val / max(avg, 1e-9)) - 1.5)
-        g = lin(-min(2.2, over * 0.45))
-        start = b * win; end = min(n, start + win)
-        for i in range(start, end):
-            env[i] = g
-    # smooth the fader movement
-    a = math.exp(-1 / (sr * 0.18)); y = 1.0
-    for i in range(n):
-        y = (1 - a) * env[i] + a * y
-        chans[0][i] *= y; chans[1][i] *= y
+def apply_final_fade(chans, sr, fade_seconds=2.0):
+    # Only the last two seconds receive a global fade.  Quiet passages earlier
+    # in the song are left untouched, so RMS dips can never be mistaken for an ending.
+    n = min(len(chans[0]), len(chans[1]))
+    fade = min(n, int(sr * fade_seconds))
+    if fade <= 0:
+        return
+    start = n - fade
+    for i in range(start, n):
+        g = (n - 1 - i) / max(1, fade - 1)
+        chans[0][i] *= g
+        chans[1][i] *= g
 
 
 def tape_echo(src, sr, delay_s=0.43, feedback=0.34, send_db=-12.8):
@@ -245,6 +237,8 @@ def add_into(dst, src, gain=1.0):
 
 def main():
     OUT.mkdir(exist_ok=True); REPORTS.mkdir(exist_ok=True)
+    for wav in GENERATED_WAVS:
+        wav.unlink(missing_ok=True)
     loaded = {}; pre = []
     for key, path in INPUTS.items():
         chans, sr, orig_ch, _ = read_wav(path)
@@ -260,15 +254,16 @@ def main():
     # Evolving Circles: primary atmosphere with audible tape echo + dark chamber.
     highpass(evolving, sr, 32); shelf_cut(evolving, sr, 145, 0.07); lowpass_inplace(evolving, sr, 11800)
     evo_echo = tape_echo(evolving, sr); highpass(evo_echo, sr, 95); evo_chamber = chamber(evolving, sr, -25.0); highpass(evo_chamber, sr, 120)
-    soft_saturate(evolving, 1.035); gain_pan(evolving, -1.6, -0.10)
+    soft_saturate(evolving, 1.035); gain_pan(evolving, -1.6, 0.23)
 
     # Sharp Chorus: harmonic support, slightly behind and warmer, no competition with echo lead.
     highpass(sharp, sr, 42); shelf_cut(sharp, sr, 260, 0.18); lowpass_inplace(sharp, sr, 7600)
-    soft_saturate(sharp, 1.055); gain_pan(sharp, -6.2, 0.08)
+    soft_saturate(sharp, 1.055); gain_pan(sharp, -6.2, -0.23)
 
-    # Neon GB: rhythmic bed.  Fader automation controls active drum passages before tone/level.
-    automate_neon(neon, sr); highpass(neon, sr, 27); shelf_cut(neon, sr, 92, 0.05); lowpass_inplace(neon, sr, 9800)
-    soft_saturate(neon, 1.025); gain_pan(neon, -4.2, 0.02)
+    # Neon GB: rhythmic bed, lifted exactly +3 dB from the prior mix level.
+    # No RMS-driven fader automation is used, preserving transients and avoiding false endings.
+    highpass(neon, sr, 27); shelf_cut(neon, sr, 92, 0.05); lowpass_inplace(neon, sr, 9800)
+    soft_saturate(neon, 1.025); gain_pan(neon, -1.2, 0.0)
 
     mix = [array("f", [0.0]) * n, array("f", [0.0]) * n]
     for tr in (evolving, sharp, neon):
@@ -285,6 +280,7 @@ def main():
     for c in (0, 1):
         for i in range(n):
             mix[c][i] *= g
+    apply_final_fade(mix, sr, 2.0)
     write_wav(OUT / "mix.wav", mix, sr)
 
     master = [array("f", mix[0]), array("f", mix[1])]
@@ -321,25 +317,26 @@ def render_report(pre, mix_a, master_a, mono_peak):
 
 - `Evolving_Circles_RAW.wav`: elemento atmosférico principal. La pista contiene energía sostenida, estéreo moderado y pocos transitorios bruscos; pedía profundidad y un eco de cinta audible. Se recortó subgrave no musical, se suavizó el extremo superior y se convirtió en la fuente principal de tape echo más cámara oscura.
 - `Sharp_Chorus_RAW.wav`: soporte armónico. Es más débil en nivel y necesita reconocimiento sin ocupar el primer plano. Se adelgazó la zona baja/media-baja para no enmascarar a Evolving Circles ni a la base.
-- `Neon_GB_RAW.wav`: base rítmica. Presenta mayor actividad transitoria y podía dominar la mezcla si se subía en exceso. Se aplicó automatización de fader por bloques para controlar pasajes fuertes antes de cualquier saturación.
+- `Neon_GB_RAW.wav`: base rítmica. Presenta mayor actividad transitoria y podía dominar la mezcla si se subía en exceso. Se elevó exactamente +3 dB respecto a la mezcla anterior, sin automatización RMS ni compresión agresiva, para conservar transitorios y dinámica.
 
 ## Balance, panorama y automatización
 
 1. Primero se fijó una mezcla de niveles: Evolving como plano principal, Sharp Chorus detrás como colchón armónico y Neon GB como base integrada.
-2. La automatización se aplicó únicamente a `Neon_GB_RAW.wav`, con reducciones suaves de hasta aproximadamente 2.2 dB en bloques rítmicamente más densos. Esto evita que la batería domine sin usar compresión agresiva.
-3. El panorama es natural y moderado: Evolving apenas hacia la izquierda, Sharp Chorus apenas hacia la derecha y Neon GB prácticamente centrado. La compatibilidad mono se comprobó mediante correlación y pico mono.
+2. Se eliminó la automatización dependiente de RMS que podía crear una caída de volumen no deseada aproximadamente a mitad de canción. Ninguna sección tranquila se interpreta como final: solo se aplica un fade global durante los últimos 2 segundos del render.
+3. `Neon_GB_RAW.wav` queda exactamente +3 dB por encima del nivel anterior (-1.2 dB frente a -4.2 dB), manteniendo transitorios y dinámica sin compensarlo con más limitación ni compresión agresiva.
+4. El panorama es suave y mono-compatible: Sharp Chorus 23% a la izquierda, Evolving Circles 23% a la derecha y Neon GB estable en el centro. El tape echo atmosférico de Evolving Circles se conserva.
 
 ## Procesamiento por pista
 
 | Pista | Nivel/pan | EQ | Dinámica | Saturación/color | Espacio |
 |---|---|---|---|---|---|
-| Evolving Circles | -1.6 dB, 10% izquierda | HP 32 Hz, recorte suave bajo 145 Hz, LP 11.8 kHz | Sin compresor | `tanh` leve tipo cinta/consola | Tape echo 430 ms con wow/flutter, feedback 0.34, filtrado a 2.75 kHz y cámara oscura |
-| Sharp Chorus | -6.2 dB, 8% derecha | HP 42 Hz, recorte bajo 260 Hz, LP 7.6 kHz | Sin compresor | Saturación un poco más cálida | Cámara secundaria muy baja |
-| Neon GB | -4.2 dB, casi centro | HP 27 Hz, recorte bajo 92 Hz, LP 9.8 kHz | Automatización de ganancia, no compresión | Saturación mínima | Sin reverb dedicada para mantener base firme |
+| Evolving Circles | -1.6 dB, 23% derecha | HP 32 Hz, recorte suave bajo 145 Hz, LP 11.8 kHz | Sin compresor | `tanh` leve tipo cinta/consola | Tape echo 430 ms con wow/flutter, feedback 0.34, filtrado a 2.75 kHz y cámara oscura |
+| Sharp Chorus | -6.2 dB, 23% izquierda | HP 42 Hz, recorte bajo 260 Hz, LP 7.6 kHz | Sin compresor | Saturación un poco más cálida | Cámara secundaria muy baja |
+| Neon GB | -1.2 dB, centro | HP 27 Hz, recorte bajo 92 Hz, LP 9.8 kHz | Sin automatización RMS ni compresión | Saturación mínima | Sin reverb dedicada para mantener base firme |
 
 ## Bus master y mastering
 
-- Bus de mezcla: saturación de consola/cinta muy ligera y normalización conservadora a -3.2 dBFS de pico de muestra.
+- Bus de mezcla: saturación de consola/cinta muy ligera, normalización conservadora a -3.2 dBFS de pico de muestra y fade global únicamente en los últimos 2 segundos.
 - Master: filtrado superior suave a 15.5 kHz, saturación mínima y ganancia final con techo de -1.0 dBFS como aproximación conservadora a -1 dBTP.
 - No se usó limitación moderna ni compresión glue evidente porque el objetivo era dinámica, textura y profundidad de finales de los 60.
 
@@ -387,7 +384,7 @@ python3 process_audio.py
 
 ## Enfoque sonoro
 
-El script construye primero un balance de niveles y después aplica tratamiento específico por pista. `Evolving_Circles_RAW.wav` recibe el rol atmosférico principal con tape echo largo, oscuro y degradado; `Sharp_Chorus_RAW.wav` queda como soporte armónico reconocible; `Neon_GB_RAW.wav` actúa como base rítmica controlada mediante automatización de volumen suave para que la batería no domine.
+El script construye primero un balance de niveles y después aplica tratamiento específico por pista. `Evolving_Circles_RAW.wav` recibe el rol atmosférico principal con tape echo largo, oscuro y degradado; `Sharp_Chorus_RAW.wav` queda como soporte armónico reconocible; `Neon_GB_RAW.wav` actúa como base rítmica centrada, elevada +3 dB respecto a la mezcla anterior y sin automatización RMS.
 """
 
 
