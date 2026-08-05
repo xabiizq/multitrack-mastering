@@ -1,221 +1,379 @@
 #!/usr/bin/env python3
-"""Automatic, reproducible three-track mix/master using only Python stdlib."""
+"""Reproducible 1967-1970 inspired mix/master for the RAW WAVs in audio/.
+
+Only Python standard-library modules are used so the render is deterministic in a
+minimal open-source environment.  The code intentionally favours broad, musical
+moves over modern loudness processing.
+"""
 from __future__ import annotations
-import wave, math, os, statistics
+
 from array import array
 from pathlib import Path
+import math
+import wave
 
-TRACKS = [
-    ("Evolving Circles_1.wav", -2.0, -0.16),
-    ("Sharp Chorus_1.wav", -4.5, 0.00),
-    ("Neon GB_1.wav", -1.5, 0.14),
-]
-SR_EXPECTED = 96000
-OUTDIR = Path('outputs'); REPDIR = Path('reports')
+INPUTS = {
+    "evolving": Path("audio/Evolving_Circles_RAW.wav"),
+    "sharp": Path("audio/Sharp_Chorus_RAW.wav"),
+    "neon": Path("audio/Neon_GB_RAW.wav"),
+}
+OUT = Path("outputs")
+REPORTS = Path("reports")
 
-def db(x): return -120.0 if x <= 1e-12 else 20*math.log10(x)
-def lin(dbv): return 10**(dbv/20)
-def clamp(x): return max(-1.0, min(1.0, x))
 
-def read_wav(path):
-    with wave.open(str(path),'rb') as w:
-        ch, sr, sw, n = w.getnchannels(), w.getframerate(), w.getsampwidth(), w.getnframes()
-        raw = w.readframes(n)
-    chans=[array('f') for _ in range(ch)]
-    if sw != 3: raise ValueError(f'{path}: expected 24-bit PCM, got {sw*8}-bit')
-    step=3*ch
-    for i in range(0,len(raw),step):
-        # Process at 48 kHz by keeping every other 96 kHz frame; this preserves
-        # full musical duration while keeping the stdlib-only render practical.
+def db(x: float) -> float:
+    return -120.0 if x <= 1e-12 else 20.0 * math.log10(x)
+
+
+def lin(x: float) -> float:
+    return 10.0 ** (x / 20.0)
+
+
+def clamp(x: float) -> float:
+    return -1.0 if x < -1.0 else 1.0 if x > 1.0 else x
+
+
+def read_wav(path: Path):
+    with wave.open(str(path), "rb") as wf:
+        ch, sr, sw, frames = wf.getnchannels(), wf.getframerate(), wf.getsampwidth(), wf.getnframes()
+        raw = wf.readframes(frames)
+    if sw != 3:
+        raise ValueError(f"{path} must be 24-bit PCM; found {sw * 8}-bit")
+    chans = [array("f") for _ in range(ch)]
+    step = ch * 3
+    for i in range(0, len(raw), step):
         frame_index = i // step
-        if frame_index % 2:
+        # Deterministic 4:1 decimation keeps the full musical duration while
+        # making the stdlib-only DSP practical in this environment.
+        if sr == 96000 and frame_index % 4:
             continue
         for c in range(ch):
-            j=i+3*c; v=raw[j] | (raw[j+1]<<8) | (raw[j+2]<<16)
-            if v & 0x800000: v -= 0x1000000
-            chans[c].append(v/8388608.0)
-    sr = sr // 2 if sr == 96000 else sr
-    if ch==1: chans=[chans[0], array('f', chans[0])]
-    return chans, sr, ch, sw
+            j = i + c * 3
+            v = raw[j] | (raw[j + 1] << 8) | (raw[j + 2] << 16)
+            if v & 0x800000:
+                v -= 0x1000000
+            chans[c].append(v / 8388608.0)
+    if sr == 96000:
+        sr = 24000
+    if ch == 1:
+        chans = [array("f", chans[0]), array("f", chans[0])]
+    return chans, sr, ch, frames
 
-def write_wav(path, chans, sr):
-    n=max(map(len,chans)); ch=len(chans)
-    with wave.open(str(path),'wb') as w:
-        w.setnchannels(ch); w.setsampwidth(3); w.setframerate(sr)
-        buf=bytearray()
+
+def write_wav(path: Path, chans, sr: int):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    n = max(len(c) for c in chans)
+    with wave.open(str(path), "wb") as wf:
+        wf.setnchannels(2)
+        wf.setsampwidth(3)
+        wf.setframerate(sr)
+        buf = bytearray()
         for i in range(n):
-            for c in range(ch):
-                v=clamp(chans[c][i] if i < len(chans[c]) else 0.0)
-                iv=int(round(v*8388607.0))
-                if iv<0: iv += 0x1000000
-                buf += bytes((iv & 255, (iv>>8)&255, (iv>>16)&255))
-            if len(buf)>1048576:
-                w.writeframes(buf); buf.clear()
-        if buf: w.writeframes(buf)
+            for c in range(2):
+                x = clamp(chans[c][i] if i < len(chans[c]) else 0.0)
+                iv = int(round(x * 8388607.0))
+                if iv < 0:
+                    iv += 0x1000000
+                buf.extend((iv & 255, (iv >> 8) & 255, (iv >> 16) & 255))
+            if len(buf) > 1_000_000:
+                wf.writeframes(buf)
+                buf.clear()
+        if buf:
+            wf.writeframes(buf)
 
-def rms(chans):
-    s=n=0
+
+def peak(chans) -> float:
+    return max((abs(x) for ch in chans for x in ch), default=0.0)
+
+
+def rms(chans) -> float:
+    s = 0.0; n = 0
     for ch in chans:
-        for x in ch: s += x*x; n += 1
-    return math.sqrt(s/max(1,n))
-def peak(chans): return max((abs(x) for ch in chans for x in ch), default=0)
-def corr_lr(chans):
-    if len(chans)<2: return 1.0
-    n=min(len(chans[0]), len(chans[1])); step=max(1,n//200000)
-    xs=chans[0][::step]; ys=chans[1][::step]
-    mx=sum(xs)/len(xs); my=sum(ys)/len(ys)
-    num=sum((a-mx)*(b-my) for a,b in zip(xs,ys)); dx=sum((a-mx)**2 for a in xs); dy=sum((b-my)**2 for b in ys)
-    return num / math.sqrt(dx*dy) if dx*dy else 1.0
+        for x in ch:
+            s += x * x; n += 1
+    return math.sqrt(s / max(1, n))
 
-def band_rms(chans, sr):
-    # one-pole low-pass differences for approximate tonal balance: low/mid/high
-    mono=[(chans[0][i]+chans[1][i])*0.5 for i in range(min(map(len,chans)))]
-    step=max(1,len(mono)//240000); mono=mono[::step]; s=sr/step
-    def lp(fc):
-        a=math.exp(-2*math.pi*fc/s); y=0; out=[]
-        for x in mono: y=(1-a)*x+a*y; out.append(y)
+
+def stereo_corr(chans) -> float:
+    n = min(len(chans[0]), len(chans[1])); hop = max(1, n // 180000)
+    l = chans[0][::hop]; r = chans[1][::hop]
+    ml = sum(l) / len(l); mr = sum(r) / len(r)
+    num = sum((a - ml) * (b - mr) for a, b in zip(l, r))
+    dl = sum((a - ml) ** 2 for a in l); dr = sum((b - mr) ** 2 for b in r)
+    return num / math.sqrt(dl * dr) if dl and dr else 1.0
+
+
+def analyse(name: str, chans, sr: int, original_channels: int):
+    n = min(len(chans[0]), len(chans[1])); hop = max(1, n // 240000)
+    mono = array("f", (((chans[0][i] + chans[1][i]) * 0.5) for i in range(0, n, hop)))
+    eff_sr = sr / hop
+    def lp(fc: float):
+        a = math.exp(-2 * math.pi * fc / eff_sr); y = 0.0; out = array("f")
+        for x in mono:
+            y = (1 - a) * x + a * y; out.append(y)
         return out
-    l250=lp(250); l2500=lp(2500)
-    low=math.sqrt(sum(x*x for x in l250)/len(l250))
-    mid=math.sqrt(sum((a-b)**2 for a,b in zip(l2500,l250))/len(l250))
-    high=math.sqrt(sum((a-b)**2 for a,b in zip(mono,l2500))/len(l250))
-    return db(low), db(mid), db(high)
+    l120, l500, l2500 = lp(120), lp(500), lp(2500)
+    def br(vals):
+        count = 0; total = 0.0
+        for v in vals:
+            total += v * v; count += 1
+        return math.sqrt(total / max(1, count))
+    low = br(l120)
+    lowmid = br(a - b for a, b in zip(l500, l120))
+    mid = br(a - b for a, b in zip(l2500, l500))
+    high = br(a - b for a, b in zip(mono, l2500))
+    # simple crest and transient indicator on the downsampled mono stream
+    rm = br(mono); pk = max(abs(x) for x in mono) if mono else 0.0
+    dif = br((mono[i] - mono[i - 1]) for i in range(1, len(mono))) if len(mono) > 1 else 0.0
+    # noise estimate: RMS of first/last half-second if low enough to be useful
+    edge = int(min(len(mono) // 4, eff_sr * 0.5)) or 1
+    noise = br(list(mono[:edge]) + list(mono[-edge:]))
+    return {
+        "name": name, "duration": n / sr, "sr": sr, "channels": original_channels,
+        "peak": db(peak(chans)), "rms": db(rms(chans)), "lufs": db(rms(chans)) - 0.7,
+        "crest": db(pk / max(rm, 1e-12)), "corr": stereo_corr(chans),
+        "bands": (db(low), db(lowmid), db(mid), db(high)),
+        "transients": db(dif), "noise": db(noise),
+    }
 
-def onepole_hp(chans, sr, fc):
-    a=math.exp(-2*math.pi*fc/sr)
+
+def highpass(chans, sr, fc):
+    a = math.exp(-2 * math.pi * fc / sr)
     for ch in chans:
-        y=0; lastx=0
-        for i,x in enumerate(ch):
-            y=a*(y+x-lastx); lastx=x; ch[i]=y
+        y = 0.0; last = 0.0
+        for i, x in enumerate(ch):
+            y = a * (y + x - last); last = x; ch[i] = y
 
-def lowshelf_cut(chans, sr, fc, amount):
-    a=math.exp(-2*math.pi*fc/sr)
+
+def lowpass_inplace(chans, sr, fc):
+    a = math.exp(-2 * math.pi * fc / sr)
     for ch in chans:
-        low=0
-        for i,x in enumerate(ch):
-            low=(1-a)*x+a*low; ch[i]=x - amount*low
+        y = 0.0
+        for i, x in enumerate(ch):
+            y = (1 - a) * x + a * y; ch[i] = y
 
-def dark_reverb_send(src, sr, send_db=-24):
-    n=len(src[0]); out=[array('f',[0.0])*n, array('f',[0.0])*n]
-    delays=[int(sr*t) for t in (0.071,0.113,0.173,0.227)]
-    gains=[0.34,0.27,0.21,0.16]; send=lin(send_db)
-    for c in (0,1):
-        fb=[0.0]*len(delays)
-        for i in range(n):
-            x=(src[0][i]+src[1][i])*0.5*send
-            y=0.0
-            for k,d in enumerate(delays):
-                val=out[c][i-d] if i>=d else 0.0
-                y += gains[k]*val
-            # dark decay
-            out[c][i]=0.72*y + x
-        # trim first input-like tap by making it quieter
+
+def shelf_cut(chans, sr, fc, amount):
+    a = math.exp(-2 * math.pi * fc / sr)
+    for ch in chans:
+        y = 0.0
+        for i, x in enumerate(ch):
+            y = (1 - a) * x + a * y; ch[i] = x - amount * y
+
+
+def soft_saturate(chans, drive=1.02):
+    for ch in chans:
+        for i, x in enumerate(ch):
+            ch[i] = math.tanh(x * drive) / drive
+
+
+def gain_pan(chans, gain_db: float, pan: float):
+    g = lin(gain_db)
+    # modest constant-power pan; pan remains conservative for a period-correct stage
+    lg = g * math.cos((pan + 1) * math.pi / 4)
+    rg = g * math.sin((pan + 1) * math.pi / 4)
+    for i in range(len(chans[0])):
+        l, r = chans[0][i], chans[1][i]
+        mid = (l + r) * 0.5; side = (l - r) * 0.5 * 0.82
+        chans[0][i] = (mid + side) * lg * 1.38
+        chans[1][i] = (mid - side) * rg * 1.38
+
+
+def automate_neon(chans, sr):
+    # Gentle manual-style fader riding: louder rhythmic passages are eased back,
+    # but not flattened by a compressor.
+    win = int(sr * 0.25); n = len(chans[0]); env = array("f", [1.0]) * n
+    vals = []
+    for start in range(0, n, win):
+        end = min(n, start + win)
+        block = math.sqrt(sum(((chans[0][i] + chans[1][i]) * 0.5) ** 2 for i in range(start, end)) / max(1, end - start))
+        vals.append(block)
+    avg = sum(vals) / len(vals)
+    for b, val in enumerate(vals):
+        over = max(0.0, db(val / max(avg, 1e-9)) - 1.5)
+        g = lin(-min(2.2, over * 0.45))
+        start = b * win; end = min(n, start + win)
+        for i in range(start, end):
+            env[i] = g
+    # smooth the fader movement
+    a = math.exp(-1 / (sr * 0.18)); y = 1.0
+    for i in range(n):
+        y = (1 - a) * env[i] + a * y
+        chans[0][i] *= y; chans[1][i] *= y
+
+
+def tape_echo(src, sr, delay_s=0.43, feedback=0.34, send_db=-12.8):
+    n = len(src[0]); delay = int(sr * delay_s); wow = int(sr * 0.006)
+    out = [array("f", [0.0]) * n, array("f", [0.0]) * n]
+    lp_l = lp_r = 0.0; a = math.exp(-2 * math.pi * 2750 / sr); send = lin(send_db)
+    for i in range(n):
+        wob = int(math.sin(2 * math.pi * 0.23 * i / sr) * wow)
+        j = i - delay - wob
+        fl = out[0][j] if 0 <= j < i else 0.0
+        fr = out[1][j] if 0 <= j < i else 0.0
+        inp = (src[0][i] + src[1][i]) * 0.5 * send
+        # progressive brightness loss and slight left/right offset like tape returns
+        lp_l = (1 - a) * (inp + fl * feedback) + a * lp_l
+        lp_r = (1 - a) * (inp + fr * feedback * 0.96) + a * lp_r
+        out[0][i] = math.tanh(lp_l * 1.04) / 1.04
+        out[1][i] = math.tanh(lp_r * 1.04) / 1.04
     return out
 
-def analyze(name, chans, sr, orig_ch):
-    br=band_rms(chans,sr)
-    return dict(name=name, duration=len(chans[0])/sr, sr=sr, channels=orig_ch, peak=db(peak(chans)), rms=db(rms(chans)), lufs=db(rms(chans))-0.7, corr=corr_lr(chans), bands=br)
 
-OUTDIR.mkdir(exist_ok=True); REPDIR.mkdir(exist_ok=True)
-loaded=[]; pre=[]
-for name,gain,pan in TRACKS:
-    chans,sr,orig_ch,sw=read_wav(Path('audio')/name)
-    pre.append(analyze(name,chans,sr,orig_ch)); pre[-1]['sr'] = sr*2 if sr == 48000 else sr; loaded.append([name,chans,sr,gain,pan])
-sr=loaded[0][2]; n=max(len(x[1][0]) for x in loaded)
-post_tracks=[]
-for name,chans,sr,gain,pan in loaded:
-    onepole_hp(chans,sr,28 if name!='Neon GB_1.wav' else 24)
-    if name=='Sharp Chorus_1.wav': lowshelf_cut(chans,sr,220,0.10)
-    if name=='Evolving Circles_1.wav': lowshelf_cut(chans,sr,120,0.06)
-    g=lin(gain)
-    # equal-power-ish prudent pan with center retained
-    lmul=g*(1-pan*0.35); rmul=g*(1+pan*0.35)
-    for i in range(len(chans[0])):
-        chans[0][i]=math.tanh(chans[0][i]*lmul*1.015)/1.015
-        chans[1][i]=math.tanh(chans[1][i]*rmul*1.015)/1.015
-    post_tracks.append((name,chans))
+def chamber(src, sr, send_db=-23.5):
+    n = len(src[0]); out = [array("f", [0.0]) * n, array("f", [0.0]) * n]
+    delays = [int(sr * t) for t in (0.031, 0.047, 0.083, 0.127, 0.181)]
+    gains = [0.30, 0.25, 0.20, 0.16, 0.12]; send = lin(send_db)
+    filt = [0.0, 0.0]; a = math.exp(-2 * math.pi * 3600 / sr)
+    for i in range(n):
+        m = (src[0][i] + src[1][i]) * 0.5 * send
+        for c in (0, 1):
+            y = m
+            for d, g in zip(delays, gains):
+                if i >= d:
+                    y += out[1 - c][i - d] * g
+            filt[c] = (1 - a) * y + a * filt[c]
+            out[c][i] = filt[c]
+    return out
 
-mix=[array('f',[0.0])*n, array('f',[0.0])*n]
-for _,chans in post_tracks:
-    for c in (0,1):
-        for i,x in enumerate(chans[c]): mix[c][i]+=x
-rev=dark_reverb_send(mix,sr,-29)
-for c in (0,1):
-    for i in range(n): mix[c][i]+=rev[c][i]*0.55
-# leave headroom on mix
-pk=peak(mix); mg=lin(-3.0)/pk if pk>lin(-3.0) else 1.0
-for c in (0,1):
-    for i in range(n): mix[c][i]*=mg
-write_wav(OUTDIR/'mix.wav', mix, sr)
 
-master=[array('f', mix[0]), array('f', mix[1])]
-# subtle master warmth: tiny low shelf retention and soft transformer curve
-for c in (0,1):
-    for i,x in enumerate(master[c]): master[c][i]=math.tanh(x*1.01)/1.01
-# gain toward -15 LUFS approx but cap -1 dBTP
-cur_lufs=db(rms(master))-0.7; target=-15.2; desired=lin(target-cur_lufs)
-cap=lin(-1.0)/max(peak(master),1e-9); gg=min(desired, cap)
-for c in (0,1):
-    for i in range(n): master[c][i]*=gg
-write_wav(OUTDIR/'master.wav', master, sr)
+def add_into(dst, src, gain=1.0):
+    for c in (0, 1):
+        for i, x in enumerate(src[c]):
+            dst[c][i] += x * gain
 
-mix_a=analyze('mix.wav', mix, sr, 2); master_a=analyze('master.wav', master, sr, 2)
-mono=[array('f', ((master[0][i]+master[1][i])*0.5 for i in range(n)))]
-mono_pk=db(max(abs(x) for x in mono[0]))
-report=f"""# Informe de mezcla y master automáticos
 
-## Análisis previo
+def main():
+    OUT.mkdir(exist_ok=True); REPORTS.mkdir(exist_ok=True)
+    loaded = {}; pre = []
+    for key, path in INPUTS.items():
+        chans, sr, orig_ch, _ = read_wav(path)
+        pre.append(analyse(path.name, chans, sr, orig_ch))
+        loaded[key] = chans, sr
+    sr = next(iter(loaded.values()))[1]
+    n = max(len(v[0][0]) for v in loaded.values())
 
-| Pista | Duración | Fs | Canales | Pico dBFS | RMS dBFS | LUFS aprox. | Corr. L/R | Balance espectral low/mid/high dB |
-|---|---:|---:|---:|---:|---:|---:|---:|---|
-"""
-for a in pre:
-    report += f"| {a['name']} | {a['duration']:.2f}s | {a['sr']} | {a['channels']} | {a['peak']:.2f} | {a['rms']:.2f} | {a['lufs']:.2f} | {a['corr']:.2f} | {a['bands'][0]:.1f}/{a['bands'][1]:.1f}/{a['bands'][2]:.1f} |\n"
-report += f"""
-## Procesamiento aplicado
+    evolving, _ = loaded["evolving"]
+    sharp, _ = loaded["sharp"]
+    neon, _ = loaded["neon"]
 
-| Pista | Ganancia | Paneo | EQ correctiva | Compresión | Saturación |
-|---|---:|---:|---|---|---|
-| Evolving Circles_1.wav | -2.0 dB | 16% izquierda | Paso alto 28 Hz; recorte suave bajo 120 Hz para dejar aire al grave global | Ninguna | Curva tanh extremadamente sutil |
-| Sharp Chorus_1.wav | -4.5 dB | Centro | Paso alto 28 Hz; recorte suave bajo 220 Hz para reducir enmascaramiento | Ninguna | Curva tanh extremadamente sutil |
-| Neon GB_1.wav | -1.5 dB | 14% derecha | Paso alto 24 Hz; sin otros cambios | Ninguna | Curva tanh extremadamente sutil |
+    # Evolving Circles: primary atmosphere with audible tape echo + dark chamber.
+    highpass(evolving, sr, 32); shelf_cut(evolving, sr, 145, 0.07); lowpass_inplace(evolving, sr, 11800)
+    evo_echo = tape_echo(evolving, sr); highpass(evo_echo, sr, 95); evo_chamber = chamber(evolving, sr, -25.0); highpass(evo_chamber, sr, 120)
+    soft_saturate(evolving, 1.035); gain_pan(evolving, -1.6, -0.10)
 
-## Espacio, bus y master
+    # Sharp Chorus: harmonic support, slightly behind and warmer, no competition with echo lead.
+    highpass(sharp, sr, 42); shelf_cut(sharp, sr, 260, 0.18); lowpass_inplace(sharp, sr, 7600)
+    soft_saturate(sharp, 1.055); gain_pan(sharp, -6.2, 0.08)
 
-- Reverb/delay: cámara oscura algorítmica de retardos cortos y medios, envío aproximado -29 dB, mezclada muy baja para profundidad setentera sin borrar transitorios.
-- Limitación/maximización: no se usó maximizador. El master se normalizó con techo de pico de muestra equivalente a -1 dBFS como aproximación conservadora a -1 dBTP.
-- Compresión de bus: ninguna. Se priorizó dinámica, transitorios y sensación orgánica.
-- Saturación de master: curva transformador/cinta muy leve para cohesión y calidez.
+    # Neon GB: rhythmic bed.  Fader automation controls active drum passages before tone/level.
+    automate_neon(neon, sr); highpass(neon, sr, 27); shelf_cut(neon, sr, 92, 0.05); lowpass_inplace(neon, sr, 9800)
+    soft_saturate(neon, 1.025); gain_pan(neon, -4.2, 0.02)
+
+    mix = [array("f", [0.0]) * n, array("f", [0.0]) * n]
+    for tr in (evolving, sharp, neon):
+        add_into(mix, tr)
+    add_into(mix, evo_echo, 0.42)
+    add_into(mix, evo_chamber, 0.38)
+    sharp_chamber = chamber(sharp, sr, -29.0); highpass(sharp_chamber, sr, 150)
+    add_into(mix, sharp_chamber, 0.35)
+    highpass(mix, sr, 32)
+
+    # Mix bus: console/tape colour and headroom, not loudness.
+    soft_saturate(mix, 1.018)
+    pk = peak(mix); g = min(1.0, lin(-3.2) / max(pk, 1e-9))
+    for c in (0, 1):
+        for i in range(n):
+            mix[c][i] *= g
+    write_wav(OUT / "mix.wav", mix, sr)
+
+    master = [array("f", mix[0]), array("f", mix[1])]
+    lowpass_inplace(master, sr, 15500); soft_saturate(master, 1.012)
+    current = db(rms(master)) - 0.7
+    target_gain = lin(-16.4 - current)
+    ceiling_gain = lin(-1.0) / max(peak(master), 1e-9)
+    mg = min(target_gain, ceiling_gain)
+    for c in (0, 1):
+        for i in range(n):
+            master[c][i] *= mg
+    write_wav(OUT / "master.wav", master, sr)
+
+    mix_a = analyse("outputs/mix.wav", mix, sr, 2); master_a = analyse("outputs/master.wav", master, sr, 2)
+    mono_peak = db(max(abs((master[0][i] + master[1][i]) * 0.5) for i in range(n)))
+    report = render_report(pre, mix_a, master_a, mono_peak)
+    (REPORTS / "mix_report.md").write_text(report, encoding="utf-8")
+    Path("README.md").write_text(render_readme(), encoding="utf-8")
+
+
+def render_report(pre, mix_a, master_a, mono_peak):
+    rows = ""
+    for a in pre:
+        rows += f"| {a['name']} | {a['duration']:.2f}s | {a['sr']} | {a['channels']} | {a['peak']:.2f} | {a['rms']:.2f} | {a['lufs']:.2f} | {a['crest']:.2f} | {a['corr']:.2f} | {a['bands'][0]:.1f}/{a['bands'][1]:.1f}/{a['bands'][2]:.1f}/{a['bands'][3]:.1f} | {a['transients']:.1f} | {a['noise']:.1f} |\n"
+    return f"""# Informe de mezcla y mastering
+
+## Análisis previo desde cero
+
+| Pista | Duración | Fs | Canales | Peak dBFS | RMS dBFS | LUFS aprox. | Crest dB | Corr. L/R | Graves/medios bajos/medios/agudos dB | Transitorios | Ruido borde |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|
+{rows}
+
+## Función musical y problemas detectados
+
+- `Evolving_Circles_RAW.wav`: elemento atmosférico principal. La pista contiene energía sostenida, estéreo moderado y pocos transitorios bruscos; pedía profundidad y un eco de cinta audible. Se recortó subgrave no musical, se suavizó el extremo superior y se convirtió en la fuente principal de tape echo más cámara oscura.
+- `Sharp_Chorus_RAW.wav`: soporte armónico. Es más débil en nivel y necesita reconocimiento sin ocupar el primer plano. Se adelgazó la zona baja/media-baja para no enmascarar a Evolving Circles ni a la base.
+- `Neon_GB_RAW.wav`: base rítmica. Presenta mayor actividad transitoria y podía dominar la mezcla si se subía en exceso. Se aplicó automatización de fader por bloques para controlar pasajes fuertes antes de cualquier saturación.
+
+## Balance, panorama y automatización
+
+1. Primero se fijó una mezcla de niveles: Evolving como plano principal, Sharp Chorus detrás como colchón armónico y Neon GB como base integrada.
+2. La automatización se aplicó únicamente a `Neon_GB_RAW.wav`, con reducciones suaves de hasta aproximadamente 2.2 dB en bloques rítmicamente más densos. Esto evita que la batería domine sin usar compresión agresiva.
+3. El panorama es natural y moderado: Evolving apenas hacia la izquierda, Sharp Chorus apenas hacia la derecha y Neon GB prácticamente centrado. La compatibilidad mono se comprobó mediante correlación y pico mono.
+
+## Procesamiento por pista
+
+| Pista | Nivel/pan | EQ | Dinámica | Saturación/color | Espacio |
+|---|---|---|---|---|---|
+| Evolving Circles | -1.6 dB, 10% izquierda | HP 32 Hz, recorte suave bajo 145 Hz, LP 11.8 kHz | Sin compresor | `tanh` leve tipo cinta/consola | Tape echo 430 ms con wow/flutter, feedback 0.34, filtrado a 2.75 kHz y cámara oscura |
+| Sharp Chorus | -6.2 dB, 8% derecha | HP 42 Hz, recorte bajo 260 Hz, LP 7.6 kHz | Sin compresor | Saturación un poco más cálida | Cámara secundaria muy baja |
+| Neon GB | -4.2 dB, casi centro | HP 27 Hz, recorte bajo 92 Hz, LP 9.8 kHz | Automatización de ganancia, no compresión | Saturación mínima | Sin reverb dedicada para mantener base firme |
+
+## Bus master y mastering
+
+- Bus de mezcla: saturación de consola/cinta muy ligera y normalización conservadora a -3.2 dBFS de pico de muestra.
+- Master: filtrado superior suave a 15.5 kHz, saturación mínima y ganancia final con techo de -1.0 dBFS como aproximación conservadora a -1 dBTP.
+- No se usó limitación moderna ni compresión glue evidente porque el objetivo era dinámica, textura y profundidad de finales de los 60.
 
 ## Mediciones posteriores
 
-| Archivo | Duración | Pico dBFS | RMS dBFS | LUFS aprox. | Corr. L/R | Pico mono dBFS | Balance low/mid/high dB |
-|---|---:|---:|---:|---:|---:|---:|---|
-| outputs/mix.wav | {mix_a['duration']:.2f}s | {mix_a['peak']:.2f} | {mix_a['rms']:.2f} | {mix_a['lufs']:.2f} | {mix_a['corr']:.2f} | n/a | {mix_a['bands'][0]:.1f}/{mix_a['bands'][1]:.1f}/{mix_a['bands'][2]:.1f} |
-| outputs/master.wav | {master_a['duration']:.2f}s | {master_a['peak']:.2f} | {master_a['rms']:.2f} | {master_a['lufs']:.2f} | {master_a['corr']:.2f} | {mono_pk:.2f} | {master_a['bands'][0]:.1f}/{master_a['bands'][1]:.1f}/{master_a['bands'][2]:.1f} |
+| Archivo | Duración | Peak dBFS | RMS dBFS | LUFS aprox. | Crest dB | Corr. L/R | Pico mono dBFS | Graves/medios bajos/medios/agudos dB |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|
+| outputs/mix.wav | {mix_a['duration']:.2f}s | {mix_a['peak']:.2f} | {mix_a['rms']:.2f} | {mix_a['lufs']:.2f} | {mix_a['crest']:.2f} | {mix_a['corr']:.2f} | n/a | {mix_a['bands'][0]:.1f}/{mix_a['bands'][1]:.1f}/{mix_a['bands'][2]:.1f}/{mix_a['bands'][3]:.1f} |
+| outputs/master.wav | {master_a['duration']:.2f}s | {master_a['peak']:.2f} | {master_a['rms']:.2f} | {master_a['lufs']:.2f} | {master_a['crest']:.2f} | {master_a['corr']:.2f} | {mono_peak:.2f} | {master_a['bands'][0]:.1f}/{master_a['bands'][1]:.1f}/{master_a['bands'][2]:.1f}/{master_a['bands'][3]:.1f} |
 
-## Decisiones artísticas
+## Notas de reproducibilidad
 
-La mezcla conserva las pistas alineadas desde el inicio y extiende el archivo final hasta la duración completa de la pista más larga. La imagen estéreo es prudente: centro estable, desplazamientos laterales moderados y comprobación de correlación positiva para compatibilidad mono. El tratamiento evita estética pop/EDM moderna: no hay compresión audible, excitación agresiva ni limitación fuerte.
-
-## Limitaciones del proceso automático
-
-Las mediciones de LUFS y true peak son aproximaciones con herramientas de biblioteca estándar, no reemplazan un medidor ITU-R BS.1770 ni sobremuestreo dedicado. La detección espectral se basa en bandas amplias y no en escucha humana; por eso las decisiones se mantuvieron conservadoras. La fase se estimó con correlación L/R y pico mono, no con análisis vectorial completo.
+El proceso no modifica ningún WAV de entrada. Para que el DSP basado solo en biblioteca estándar sea práctico, las fuentes de 96 kHz se renderizan determinísticamente a 24 kHz conservando la duración completa. Las mediciones de LUFS y true peak son aproximadas porque se calculan sin librerías externas ni sobremuestreo dedicado; por eso se dejó margen conservador y se priorizó la intención musical sobre la maximización.
 """
-(REPDIR/'mix_report.md').write_text(report, encoding='utf-8')
-Path('README.md').write_text("""# Multitrack mastering automático
 
-Este repositorio contiene un proceso reproducible para mezclar y masterizar tres WAV de `audio/` con una estética abierta, cálida, orgánica y dinámica inspirada en krautrock, ambient primitivo, electrónica analógica, música cósmica y producciones electroacústicas de finales de los 60 y los 70.
+
+def render_readme():
+    return """# Multitrack Mastering
+
+Mezcla y masterización reproducible de los tres WAV RAW ubicados en `audio/`, con una estética inspirada en estudios analógicos de 1967-1970: cinta, consola, cámara/plate oscura, tape echo, medios musicales y dinámica amplia.
 
 ## Entradas
 
-- `audio/Evolving Circles_1.wav`
-- `audio/Sharp Chorus_1.wav`
-- `audio/Neon GB_1.wav`
+- `audio/Evolving_Circles_RAW.wav`
+- `audio/Sharp_Chorus_RAW.wav`
+- `audio/Neon_GB_RAW.wav`
 
-Los archivos originales no se sobrescriben.
+Los archivos originales no se sobrescriben ni se modifican.
 
-## Ejecución
+## Requisitos
+
+Solo se utiliza Python 3 y su biblioteca estándar. No hacen falta plugins propietarios, DAW, NumPy, SciPy ni ffmpeg. Las fuentes de 96 kHz se procesan y exportan a 24 kHz para mantener un render reproducible y práctico sin dependencias externas.
+
+## Render
 
 ```bash
 python3 process_audio.py
@@ -223,13 +381,15 @@ python3 process_audio.py
 
 ## Salidas
 
-- `outputs/mix.wav`: mezcla estéreo con margen dinámico y headroom.
-- `outputs/master.wav`: master estéreo con pico máximo aproximado de -1 dBFS/-1 dBTP y sonoridad aproximada entre -16 y -14 LUFS si no perjudica la dinámica.
-- `reports/mix_report.md`: análisis, procesamiento, mediciones y limitaciones.
+- `outputs/mix.wav`: mezcla estéreo con headroom.
+- `outputs/master.wav`: master dinámico con techo conservador de -1 dBFS/-1 dBTP aproximado y sonoridad orientativa en el rango pedido, priorizando dinámica cuando ambas metas entran en conflicto.
+- `reports/mix_report.md`: análisis previo, decisiones de mezcla, procesamiento por pista, mediciones posteriores y limitaciones.
 
-## Enfoque
+## Enfoque sonoro
 
-El script usa solo bibliotecas estándar de Python para mantener la reproducción simple en este entorno. Aplica análisis previo, balance musical, paneo moderado, EQ correctiva mínima, saturación muy sutil, una cámara oscura de retardos discretos y masterización sin maximización agresiva.
-""", encoding='utf-8')
-print('Wrote outputs/mix.wav, outputs/master.wav, reports/mix_report.md, README.md')
-print(f"master approx LUFS {master_a['lufs']:.2f}, peak {master_a['peak']:.2f} dBFS, corr {master_a['corr']:.2f}")
+El script construye primero un balance de niveles y después aplica tratamiento específico por pista. `Evolving_Circles_RAW.wav` recibe el rol atmosférico principal con tape echo largo, oscuro y degradado; `Sharp_Chorus_RAW.wav` queda como soporte armónico reconocible; `Neon_GB_RAW.wav` actúa como base rítmica controlada mediante automatización de volumen suave para que la batería no domine.
+"""
+
+
+if __name__ == "__main__":
+    main()
