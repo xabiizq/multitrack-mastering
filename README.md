@@ -1,16 +1,20 @@
-# Multitrack mastering automático
+# Multitrack Mastering
 
-Este repositorio contiene un proceso reproducible para mezclar y masterizar tres WAV de `audio/` con una estética abierta, cálida, orgánica y dinámica inspirada en krautrock, ambient primitivo, electrónica analógica, música cósmica y producciones electroacústicas de finales de los 60 y los 70.
+Mezcla y masterización reproducible de los tres WAV RAW ubicados en `audio/`, con una estética inspirada en estudios analógicos de 1967-1970: cinta, consola, cámara/plate oscura, tape echo, medios musicales y dinámica amplia.
 
 ## Entradas
 
-- `audio/Evolving Circles_1.wav`
-- `audio/Sharp Chorus_1.wav`
-- `audio/Neon GB_1.wav`
+- `audio/Evolving_Circles_RAW.wav`
+- `audio/Sharp_Chorus_RAW.wav`
+- `audio/Neon_GB_RAW.wav`
 
-Los archivos originales no se sobrescriben.
+Los archivos originales no se sobrescriben ni se modifican.
 
-## Ejecución
+## Requisitos
+
+Solo se utiliza Python 3 y su biblioteca estándar. No hacen falta plugins propietarios, DAW, NumPy, SciPy ni ffmpeg. Las fuentes de 96 kHz se procesan y exportan a 24 kHz para mantener un render reproducible y práctico sin dependencias externas.
+
+## Render
 
 ```bash
 python3 process_audio.py
@@ -18,10 +22,10 @@ python3 process_audio.py
 
 ## Salidas
 
-- `outputs/mix.wav`: mezcla estéreo con margen dinámico y headroom.
-- `outputs/master.wav`: master estéreo con pico máximo aproximado de -1 dBFS/-1 dBTP y sonoridad aproximada entre -16 y -14 LUFS si no perjudica la dinámica.
-- `reports/mix_report.md`: análisis, procesamiento, mediciones y limitaciones.
+- `outputs/mix.wav`: mezcla estéreo con headroom.
+- `outputs/master.wav`: master dinámico con techo conservador de -1 dBFS/-1 dBTP aproximado y sonoridad orientativa en el rango pedido, priorizando dinámica cuando ambas metas entran en conflicto.
+- `reports/mix_report.md`: análisis previo, decisiones de mezcla, procesamiento por pista, mediciones posteriores y limitaciones.
 
-## Enfoque
+## Enfoque sonoro
 
-El script usa solo bibliotecas estándar de Python para mantener la reproducción simple en este entorno. Aplica análisis previo, balance musical, paneo moderado, EQ correctiva mínima, saturación muy sutil, una cámara oscura de retardos discretos y masterización sin maximización agresiva.
+El script construye primero un balance de niveles y después aplica tratamiento específico por pista. `Evolving_Circles_RAW.wav` recibe el rol atmosférico principal con tape echo largo, oscuro y degradado; `Sharp_Chorus_RAW.wav` queda como soporte armónico reconocible; `Neon_GB_RAW.wav` actúa como base rítmica controlada mediante automatización de volumen suave para que la batería no domine.
