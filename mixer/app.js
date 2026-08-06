@@ -53,11 +53,11 @@
   }
 
   /* This graph is also used to create an entirely independent OfflineAudioContext graph. */
-  function buildGraph(ctx, when, pos) {
+  function buildGraph(ctx, when, pos, masterLevel) {
     var g = { context: ctx, tracks: {}, sources: [] };
     g.masterIn = ctx.createGain();
     g.masterDrive = ctx.createWaveShaper(); g.masterDrive.curve = makeCurve(settings.master.drive); g.masterDrive.oversample = 'none';
-    g.masterGain = ctx.createGain(); g.masterGain.gain.value = dbToGain(settings.master.level);
+    g.masterGain = ctx.createGain(); g.masterGain.gain.value = dbToGain(masterLevel === undefined ? settings.master.level : masterLevel);
     g.compressor = ctx.createDynamicsCompressor();
     g.compressor.threshold.value = settings.master.ceiling; g.compressor.knee.value = 0; g.compressor.ratio.value = 20; g.compressor.attack.value = 0.006; g.compressor.release.value = 0.18;
     g.processedGain = ctx.createGain(); g.processedGain.gain.value = settings.master.bypass ? 0 : 1;
@@ -86,10 +86,12 @@
     var anySolo = anyTrackSoloed();
     trackDefs.forEach(function (t) {
       var s = settings.tracks[t.id], nodes = {};
-      nodes.source = ctx.createBufferSource(); nodes.saturation = ctx.createWaveShaper(); nodes.punch = ctx.createBiquadFilter(); nodes.volume = ctx.createGain(); nodes.pan = ctx.createStereoPanner(); nodes.echoSend = ctx.createGain(); nodes.chamberSend = ctx.createGain();
-      nodes.source.buffer = buffers[t.id]; nodes.saturation.curve = makeCurve(s.saturation); nodes.punch.type = 'peaking'; nodes.punch.frequency.value = 1400; nodes.punch.Q.value = 0.7; nodes.punch.gain.value = t.punch ? s.punch * 3 : 0;
+      nodes.source = ctx.createBufferSource(); nodes.saturation = ctx.createWaveShaper(); nodes.punchBody = ctx.createBiquadFilter(); nodes.punchAttack = ctx.createBiquadFilter(); nodes.volume = ctx.createGain(); nodes.pan = ctx.createStereoPanner(); nodes.echoSend = ctx.createGain(); nodes.chamberSend = ctx.createGain();
+      nodes.source.buffer = buffers[t.id]; nodes.saturation.curve = makeCurve(s.saturation);
+      nodes.punchBody.type = 'peaking'; nodes.punchBody.frequency.value = 110; nodes.punchBody.Q.value = 0.8; nodes.punchBody.gain.value = t.punch ? s.punch * 2 : 0;
+      nodes.punchAttack.type = 'peaking'; nodes.punchAttack.frequency.value = 3200; nodes.punchAttack.Q.value = 0.9; nodes.punchAttack.gain.value = t.punch ? s.punch * 6 : 0;
       nodes.volume.gain.value = audibleTrackGain(t.id, anySolo); nodes.pan.pan.value = s.pan; nodes.echoSend.gain.value = t.echo ? s.echoSend : 0; nodes.chamberSend.gain.value = t.chamber ? s.chamberSend : 0;
-      nodes.source.connect(nodes.saturation); nodes.saturation.connect(nodes.punch); nodes.punch.connect(nodes.volume); nodes.volume.connect(nodes.pan);
+      nodes.source.connect(nodes.saturation); nodes.saturation.connect(nodes.punchBody); nodes.punchBody.connect(nodes.punchAttack); nodes.punchAttack.connect(nodes.volume); nodes.volume.connect(nodes.pan);
       nodes.pan.connect(g.masterIn); nodes.pan.connect(nodes.echoSend); nodes.echoSend.connect(g.echoDelay); nodes.pan.connect(nodes.chamberSend); nodes.chamberSend.connect(g.chamberDelay);
       nodes.source.start(when, pos); g.tracks[t.id] = nodes; g.sources.push(nodes.source);
     });
@@ -111,7 +113,7 @@
       else if (parts[2] === 'echoSend') smooth(t.echoSend.gain, s.echoSend, audioContext);
       else if (parts[2] === 'chamberSend') smooth(t.chamberSend.gain, s.chamberSend, audioContext);
       else if (parts[2] === 'saturation') t.saturation.curve = makeCurve(s.saturation);
-      else if (parts[2] === 'punch') smooth(t.punch.gain, s.punch * 3, audioContext);
+      else if (parts[2] === 'punch') { smooth(t.punchBody.gain, s.punch * 2, audioContext); smooth(t.punchAttack.gain, s.punch * 6, audioContext); }
     } else if (path === 'effects.echo.wet') smooth(graph.echoReturn.gain, settings.effects.echo.wet, audioContext);
     else if (path === 'effects.echo.time') smooth(graph.echoDelay.delayTime, settings.effects.echo.time / 1000, audioContext);
     else if (path === 'effects.echo.feedback') smooth(graph.echoFeedback.gain, settings.effects.echo.feedback, audioContext);
@@ -158,8 +160,10 @@
   function initial() { settings = clone(defaults); refreshControls(); updateAllAudioParameters(); byId('renderStatus').innerHTML = 'Valores iniciales cargados.'; }
 
   function render() {
+    /* Capture the audible fader value at the click, before the deferred offline graph is built. */
+    var renderMasterLevel = settings.master.level;
     byId('renderBtn').disabled = true; byId('renderProgress').value = 10; byId('renderStatus').innerHTML = 'Renderizando toda la canción…';
-    setTimeout(function () { var sr = audioContext.sampleRate, ctx = new OfflineAudioContext(2, Math.ceil(duration() * sr), sr); buildGraph(ctx, 0, 0); byId('renderProgress').value = 45; ctx.startRendering().then(function (b) { byId('renderProgress').value = 85; var blob = MicrophonWavEncoder.encodeWav(b.getChannelData(0), b.getChannelData(1), b.sampleRate); var url = URL.createObjectURL(blob); byId('downloadLink').href = url; byId('downloadLink').className = 'download ready'; byId('renderProgress').value = 100; byId('renderStatus').innerHTML = 'Render terminado: microphon_mix_60s.wav'; byId('renderBtn').disabled = false; }); }, 50);
+    setTimeout(function () { var sr = audioContext.sampleRate, ctx = new OfflineAudioContext(2, Math.ceil(duration() * sr), sr); buildGraph(ctx, 0, 0, renderMasterLevel); byId('renderProgress').value = 45; ctx.startRendering().then(function (b) { byId('renderProgress').value = 85; var blob = MicrophonWavEncoder.encodeWav(b.getChannelData(0), b.getChannelData(1), b.sampleRate); var url = URL.createObjectURL(blob); byId('downloadLink').href = url; byId('downloadLink').className = 'download ready'; byId('renderProgress').value = 100; byId('renderStatus').innerHTML = 'Render terminado: microphon_mix_60s.wav'; byId('renderBtn').disabled = false; }); }, 50);
   }
 
   /* Read-only diagnostics for checking transport/source stability while moving controls. */

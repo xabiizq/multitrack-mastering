@@ -31,7 +31,7 @@ http://localhost:8000/mixer/
    - solo;
    - envíos disponibles a Tape Echo y/o Dark Chamber;
    - saturación de cinta;
-   - presencia/punch moderado en Neon GB.
+   - presencia/punch en Neon GB.
 6. Ajusta los efectos globales y el master.
 7. Pulsa **Renderizar WAV** para generar la mezcla completa.
 8. Cuando termine el render, usa **Descargar WAV**. El archivo se descarga como `microphon_mix_60s.wav`.
@@ -42,7 +42,7 @@ Los valores iniciales siguen la intención de `process_audio.py`:
 
 - Evolving Circles: -1.6 dB, panorama 23 % derecha, saturación suave, Tape Echo 430 ms con feedback moderado y repeticiones oscuras, más cámara oscura.
 - Sharp Chorus: -6.2 dB, panorama 23 % izquierda, soporte armónico con cámara secundaria y saturación cálida.
-- Neon GB: -1.2 dB, centro, nivel aumentado +3 dB respecto a la versión previa, saturación mínima y presencia/punch muy moderado.
+- Neon GB: -1.2 dB, centro, nivel aumentado +3 dB respecto a la versión previa, saturación mínima y presencia/punch suave.
 - Master: techo aproximado de -1 dBFS, limitación conservadora y drive ligero. La anchura estéreo está fijada temporalmente en 1,0.
 
 ## Persistencia
@@ -62,6 +62,14 @@ El render usa `OfflineAudioContext` y aplica los mismos controles audibles de la
 - saturación por canal;
 - presencia/punch moderado para Neon GB;
 - nivel, drive, limitador, bypass y escucha mono del master.
+
+El nivel master del render es exactamente el mismo `settings.master.level` que se oye durante la reproducción. Se aplica mediante un `GainNode` explícito entre el drive master y el limitador, sin normalización posterior ni corrección automática de pico: aumentar el master eleva el RMS mientras haya margen y, al llegar al techo, hace trabajar más al limitador.
+
+### Presencia / punch de Neon GB
+
+El control combina dos ecualizadores de campana en serie: un refuerzo de cuerpo suave alrededor de **110 Hz** (hasta +2 dB) y otro de ataque y definición alrededor de **3,2 kHz** (hasta +6 dB). En `0` ambos son neutros, en `0,5` la mejora es moderada y audible, y en `1` el ataque queda claramente resaltado sin convertirse en un aumento uniforme de volumen.
+
+Los dos filtros forman parte tanto del grafo en tiempo real como del grafo de render offline. Al mover el control se actualizan sus `AudioParam` con una transición de 20 ms, sin reconstruir el grafo, reiniciar las fuentes ni alterar panorama o sincronización.
 
 No se genera MP3 y no se sobrescriben los WAV RAW originales.
 
