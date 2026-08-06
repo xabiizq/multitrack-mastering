@@ -38,10 +38,8 @@
   function makeCurve(drive) { var n = 2048, curve = new Float32Array(n); for (var i = 0; i < n; i += 1) { var x = i * 2 / n - 1; curve[i] = Math.tanh(x * drive) / Math.tanh(drive); } return curve; }
 
   function panNode(ctx, pan) {
-    var input = ctx.createGain(), l = ctx.createGain(), r = ctx.createGain(), merger = ctx.createChannelMerger(2);
-    input.connect(l); input.connect(r); l.connect(merger, 0, 0); r.connect(merger, 0, 1);
-    var lg = Math.cos((pan + 1) * Math.PI / 4), rg = Math.sin((pan + 1) * Math.PI / 4);
-    l.gain.value = lg * 1.38; r.gain.value = rg * 1.38; return { input: input, output: merger };
+    var input = ctx.createGain(), panner = ctx.createStereoPanner();
+    panner.pan.value = pan; input.connect(panner); return { input: input, output: panner };
   }
 
   function buildGraph(ctx, when, pos) {
@@ -63,7 +61,7 @@
       src.buffer = buffers[t.id]; sat.curve = makeCurve(s.saturation); punch.type = 'peaking'; punch.frequency.value = 1400; punch.Q.value = 0.7; punch.gain.value = t.punch ? s.punch * 3 : 0;
       gain.gain.value = (s.mute || (anySolo && !s.solo)) ? 0 : dbToGain(s.volume);
       echoSend.gain.value = t.echo ? s.echoSend : 0; chSend.gain.value = t.chamber ? s.chamberSend : 0;
-      src.connect(sat); sat.connect(punch); punch.connect(gain); gain.connect(pan.input); pan.output.connect(masterIn); gain.connect(echoSend); echoSend.connect(echoDelay); gain.connect(chSend); chSend.connect(chamberDelay);
+      src.connect(sat); sat.connect(punch); punch.connect(gain); gain.connect(pan.input); pan.output.connect(masterIn); pan.output.connect(echoSend); echoSend.connect(echoDelay); pan.output.connect(chSend); chSend.connect(chamberDelay);
       src.start(when, pos); sources.push(src);
     });
 

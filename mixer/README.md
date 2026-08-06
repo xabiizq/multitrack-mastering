@@ -65,6 +65,10 @@ El render usa `OfflineAudioContext` y aplica los mismos controles audibles de la
 
 No se genera MP3 y no se sobrescriben los WAV RAW originales.
 
+### Corrección del panorama por pista
+
+Cada canal dispone de un nodo de panorama estéreo propio con ley *equal-power*: `-1` envía la pista completamente a la izquierda, `0` la mantiene centrada y `+1` la envía completamente a la derecha. El panorama se aplica antes de alimentar Tape Echo y Dark Chamber y antes de sumar la pista al master, por lo que ambos buses conservan la posición estéreo de la señal de origen y ajustar un canal no modifica los demás.
+
 ## Limitaciones conocidas
 
 - El render WAV exporta PCM estéreo de 16 bits para mantener el encoder pequeño y compatible con navegadores antiguos.
