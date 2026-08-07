@@ -43,7 +43,7 @@ Los valores iniciales siguen la intención de `process_audio.py`:
 - Evolving Circles: -1.6 dB, panorama 23 % derecha, saturación suave, Tape Echo 430 ms con feedback moderado y repeticiones oscuras, más cámara oscura.
 - Sharp Chorus: -6.2 dB, panorama 23 % izquierda, soporte armónico con cámara secundaria y saturación cálida.
 - Neon GB: -1.2 dB, centro, nivel aumentado +3 dB respecto a la versión previa, saturación mínima y presencia/punch suave.
-- Master: techo aproximado de -1 dBFS, limitación conservadora y drive ligero. La anchura estéreo está fijada temporalmente en 1,0.
+- Master: techo aproximado de -1 dBFS, limitación conservadora, drive ligero y anchura estéreo neutra en 1,0.
 
 ## Persistencia
 
@@ -60,14 +60,14 @@ El render usa `OfflineAudioContext` y aplica los mismos controles audibles de la
 - Tape Echo con tiempo, feedback, filtro oscuro y wet global;
 - Dark Chamber con cantidad, duración y tono oscuro;
 - saturación por canal;
-- presencia/punch moderado para Neon GB;
-- nivel, drive, limitador, bypass y escucha mono del master.
+- presencia/punch de dos bandas para Neon GB;
+- nivel, drive, limitador, anchura estéreo, bypass y escucha mono del master.
 
 El nivel master del render es exactamente el mismo `settings.master.level` que se oye durante la reproducción. Se aplica mediante un `GainNode` explícito entre el drive master y el limitador, sin normalización posterior ni corrección automática de pico: aumentar el master eleva el RMS mientras haya margen y, al llegar al techo, hace trabajar más al limitador.
 
 ### Presencia / punch de Neon GB
 
-El control combina dos ecualizadores de campana en serie: un refuerzo de cuerpo suave alrededor de **110 Hz** (hasta +2 dB) y otro de ataque y definición alrededor de **3,2 kHz** (hasta +6 dB). En `0` ambos son neutros, en `0,5` la mejora es moderada y audible, y en `1` el ataque queda claramente resaltado sin convertirse en un aumento uniforme de volumen.
+El control combina dos ecualizadores de campana en serie: un refuerzo de cuerpo y pegada alrededor de **110 Hz** (Q 0,8, hasta +4 dB) y otro de ataque y definición alrededor de **3,2 kHz** (Q 0,9, hasta +6 dB). En `0` ambos son neutros; en `0,5` aplican aproximadamente +2 dB y +3 dB; y en `1` alcanzan +4 dB y +6 dB. Así cambia específicamente la pegada y el ataque, sin subir el volumen base de Neon GB ni usar compresión agresiva.
 
 Los dos filtros forman parte tanto del grafo en tiempo real como del grafo de render offline. Al mover el control se actualizan sus `AudioParam` con una transición de 20 ms, sin reconstruir el grafo, reiniciar las fuentes ni alterar panorama o sincronización.
 
@@ -77,7 +77,11 @@ No se genera MP3 y no se sobrescriben los WAV RAW originales.
 
 Cada canal dispone de un nodo de panorama estéreo propio con ley *equal-power*: `-1` envía la pista completamente a la izquierda, `0` la mantiene centrada y `+1` la envía completamente a la derecha. El panorama se aplica antes de alimentar Tape Echo y Dark Chamber y antes de sumar la pista al master, por lo que ambos buses conservan la posición estéreo de la señal de origen y ajustar un canal no modifica los demás.
 
-El master ya no reconstruye los canales mediante Mid/Side: la ruta procesada conserva el panorama exactamente igual que la ruta de bypass. La anchura estéreo queda fijada en `1.0` y su control está temporalmente desactivado hasta disponer de una implementación fiable.
+### Anchura estéreo del master
+
+La anchura usa una matriz estéreo Mid/Side matemáticamente equilibrada: `mid = (L + R) / 2`, `side = (L - R) / 2`, `outputL = mid + side × width` y `outputR = mid - side × width`. Se implementa con `GainNode`, `ChannelSplitter` y `ChannelMerger`: no modifica la componente central ni los panoramas individuales.
+
+El rango es **0–1,5**. `1,0` es completamente neutro y reconstruye exactamente los canales L/R originales; `0` elimina la componente lateral y entrega mono centrado; los valores entre `1,0` y `1,5` amplían moderadamente la imagen. La matriz permanente se usa tanto en tiempo real como en `OfflineAudioContext`, y el parámetro lateral se suaviza durante 20 ms al mover el control, sin reconstruir fuentes ni reiniciar el transporte. Bypass master y escucha mono conservan sus rutas permanentes y siguen conmutándose de forma suave.
 
 ### Reproducción en tiempo real
 
@@ -85,7 +89,7 @@ El grafo de Web Audio permanece activo durante toda la reproducción. Los faders
 
 Los parámetros compatibles usan `cancelScheduledValues()` y `setTargetAtTime()` con una transición corta de 20 ms para evitar clics y *zipper noise*. Bypass master y escucha mono usan rutas permanentes con ganancias cruzadas suavemente; al volver a estéreo se recuperan los panoramas originales sin reconstruir la reproducción.
 
-Para una comprobación durante el desarrollo, la consola del navegador expone `microphonMixerDiagnostics()`. Su resultado permite observar la posición, la generación de fuentes, el número de fuentes activas y la sincronización: al hacer movimientos rápidos de volumen, panorama, mute o solo, `sourceGeneration` debe permanecer constante, `activeSources` debe seguir en tres y `tracksSynchronized` debe ser `true`.
+Para una comprobación durante el desarrollo, la consola del navegador expone `microphonMixerDiagnostics()`. Su resultado permite observar la posición, la generación de fuentes, el número de fuentes activas y la sincronización: al mover anchura, punch u otros controles, `sourceGeneration` debe permanecer constante, `activeSources` debe seguir en tres y `tracksSynchronized` debe ser `true`. `matrixChecks` verifica además que anchura 1 conserva L/R, 0 produce mono y 1,5 multiplica solamente la componente lateral; `neonPunchDb` muestra en dB los refuerzos activos a 110 Hz y 3,2 kHz.
 
 ## Limitaciones conocidas
 
