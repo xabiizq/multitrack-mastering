@@ -43,6 +43,9 @@
     param.cancelScheduledValues(now);
     param.setTargetAtTime(value, now, SMOOTH_TIME);
   }
+  function clampWidth(value) { return Math.max(0, Math.min(1.5, Number(value) || 0)); }
+  function punchBodyGain(value) { return value * 4; }
+  function punchAttackGain(value) { return value * 6; }
   function anyTrackSoloed() {
     for (var i = 0; i < trackDefs.length; i += 1) if (settings.tracks[trackDefs[i].id].solo) return true;
     return false;
@@ -68,12 +71,31 @@
     g.masterIn.connect(g.masterDrive); g.masterDrive.connect(g.masterGain); g.masterGain.connect(g.compressor); g.compressor.connect(g.processedGain); g.processedGain.connect(g.outputIn);
     g.masterIn.connect(g.bypassGain); g.bypassGain.connect(g.outputIn);
 
+    /*
+     * Correct Mid/Side matrix. Each splitter output is mono, so summing into the
+     * same GainNode is safe: M=(L+R)/2 and S=(L-R)/2. Only S is scaled by width.
+     * At width 1 the merger therefore receives L=M+S and R=M-S exactly.
+     */
+    g.widthSplitter = ctx.createChannelSplitter(2); g.widthMid = ctx.createGain();
+    g.widthSideL = ctx.createGain(); g.widthSideR = ctx.createGain();
+    g.widthSide = ctx.createGain(); g.widthSideInvert = ctx.createGain();
+    g.widthMerger = ctx.createChannelMerger(2);
+    [g.widthMid, g.widthSideL, g.widthSideR, g.widthSide, g.widthSideInvert].forEach(function (node) { node.channelCount = 1; node.channelCountMode = 'explicit'; });
+    g.widthMid.gain.value = 0.5; g.widthSideL.gain.value = 0.5; g.widthSideR.gain.value = -0.5;
+    g.widthSide.gain.value = clampWidth(settings.master.width); g.widthSideInvert.gain.value = -1;
+    g.outputIn.connect(g.widthSplitter);
+    g.widthSplitter.connect(g.widthMid, 0); g.widthSplitter.connect(g.widthMid, 1);
+    g.widthSplitter.connect(g.widthSideL, 0); g.widthSplitter.connect(g.widthSideR, 1);
+    g.widthSideL.connect(g.widthSide); g.widthSideR.connect(g.widthSide);
+    g.widthMid.connect(g.widthMerger, 0, 0); g.widthMid.connect(g.widthMerger, 0, 1);
+    g.widthSide.connect(g.widthMerger, 0, 0); g.widthSide.connect(g.widthSideInvert); g.widthSideInvert.connect(g.widthMerger, 0, 1);
+
     /* Permanent stereo and mono monitor routes, switched with smoothed gains. */
     g.stereoMonitorGain = ctx.createGain(); g.stereoMonitorGain.gain.value = settings.master.mono ? 0 : 1;
     g.monoMonitorGain = ctx.createGain(); g.monoMonitorGain.gain.value = settings.master.mono ? 1 : 0;
     g.monoSplitter = ctx.createChannelSplitter(2); g.monoSum = ctx.createGain(); g.monoSum.gain.value = 0.5; g.monoMerger = ctx.createChannelMerger(2);
-    g.outputIn.connect(g.stereoMonitorGain); g.stereoMonitorGain.connect(ctx.destination);
-    g.outputIn.connect(g.monoSplitter); g.monoSplitter.connect(g.monoSum, 0); g.monoSplitter.connect(g.monoSum, 1);
+    g.widthMerger.connect(g.stereoMonitorGain); g.stereoMonitorGain.connect(ctx.destination);
+    g.widthMerger.connect(g.monoSplitter); g.monoSplitter.connect(g.monoSum, 0); g.monoSplitter.connect(g.monoSum, 1);
     g.monoSum.connect(g.monoMonitorGain); g.monoMonitorGain.connect(g.monoMerger, 0, 0); g.monoMonitorGain.connect(g.monoMerger, 0, 1); g.monoMerger.connect(ctx.destination);
 
     g.echoDelay = ctx.createDelay(1.5); g.echoFeedback = ctx.createGain(); g.echoFilter = ctx.createBiquadFilter(); g.echoReturn = ctx.createGain();
@@ -88,8 +110,8 @@
       var s = settings.tracks[t.id], nodes = {};
       nodes.source = ctx.createBufferSource(); nodes.saturation = ctx.createWaveShaper(); nodes.punchBody = ctx.createBiquadFilter(); nodes.punchAttack = ctx.createBiquadFilter(); nodes.volume = ctx.createGain(); nodes.pan = ctx.createStereoPanner(); nodes.echoSend = ctx.createGain(); nodes.chamberSend = ctx.createGain();
       nodes.source.buffer = buffers[t.id]; nodes.saturation.curve = makeCurve(s.saturation);
-      nodes.punchBody.type = 'peaking'; nodes.punchBody.frequency.value = 110; nodes.punchBody.Q.value = 0.8; nodes.punchBody.gain.value = t.punch ? s.punch * 2 : 0;
-      nodes.punchAttack.type = 'peaking'; nodes.punchAttack.frequency.value = 3200; nodes.punchAttack.Q.value = 0.9; nodes.punchAttack.gain.value = t.punch ? s.punch * 6 : 0;
+      nodes.punchBody.type = 'peaking'; nodes.punchBody.frequency.value = 110; nodes.punchBody.Q.value = 0.8; nodes.punchBody.gain.value = t.punch ? punchBodyGain(s.punch) : 0;
+      nodes.punchAttack.type = 'peaking'; nodes.punchAttack.frequency.value = 3200; nodes.punchAttack.Q.value = 0.9; nodes.punchAttack.gain.value = t.punch ? punchAttackGain(s.punch) : 0;
       nodes.volume.gain.value = audibleTrackGain(t.id, anySolo); nodes.pan.pan.value = s.pan; nodes.echoSend.gain.value = t.echo ? s.echoSend : 0; nodes.chamberSend.gain.value = t.chamber ? s.chamberSend : 0;
       nodes.source.connect(nodes.saturation); nodes.saturation.connect(nodes.punchBody); nodes.punchBody.connect(nodes.punchAttack); nodes.punchAttack.connect(nodes.volume); nodes.volume.connect(nodes.pan);
       nodes.pan.connect(g.masterIn); nodes.pan.connect(nodes.echoSend); nodes.echoSend.connect(g.echoDelay); nodes.pan.connect(nodes.chamberSend); nodes.chamberSend.connect(g.chamberDelay);
@@ -113,7 +135,7 @@
       else if (parts[2] === 'echoSend') smooth(t.echoSend.gain, s.echoSend, audioContext);
       else if (parts[2] === 'chamberSend') smooth(t.chamberSend.gain, s.chamberSend, audioContext);
       else if (parts[2] === 'saturation') t.saturation.curve = makeCurve(s.saturation);
-      else if (parts[2] === 'punch') { smooth(t.punchBody.gain, s.punch * 2, audioContext); smooth(t.punchAttack.gain, s.punch * 6, audioContext); }
+      else if (parts[2] === 'punch') { smooth(t.punchBody.gain, punchBodyGain(s.punch), audioContext); smooth(t.punchAttack.gain, punchAttackGain(s.punch), audioContext); }
     } else if (path === 'effects.echo.wet') smooth(graph.echoReturn.gain, settings.effects.echo.wet, audioContext);
     else if (path === 'effects.echo.time') smooth(graph.echoDelay.delayTime, settings.effects.echo.time / 1000, audioContext);
     else if (path === 'effects.echo.feedback') smooth(graph.echoFeedback.gain, settings.effects.echo.feedback, audioContext);
@@ -124,9 +146,9 @@
     else if (path === 'master.level') smooth(graph.masterGain.gain, dbToGain(settings.master.level), audioContext);
     else if (path === 'master.drive') graph.masterDrive.curve = makeCurve(settings.master.drive);
     else if (path === 'master.ceiling') smooth(graph.compressor.threshold, settings.master.ceiling, audioContext);
+    else if (path === 'master.width') smooth(graph.widthSide.gain, clampWidth(settings.master.width), audioContext);
     else if (path === 'master.bypass') { smooth(graph.processedGain.gain, settings.master.bypass ? 0 : 1, audioContext); smooth(graph.bypassGain.gain, settings.master.bypass ? 1 : 0, audioContext); }
     else if (path === 'master.mono') { smooth(graph.stereoMonitorGain.gain, settings.master.mono ? 0 : 1, audioContext); smooth(graph.monoMonitorGain.gain, settings.master.mono ? 1 : 0, audioContext); }
-    /* master.width is deliberately inert until a reliable stereo implementation exists. */
   }
   function updateAllAudioParameters() {
     var nodes = document.querySelectorAll('[data-setting]');
@@ -149,13 +171,12 @@
   function control(label, path, min, max, step) { return '<label>' + label + ' <span class="value" data-value="'+path+'"></span><input data-setting="'+path+'" type="range" min="'+min+'" max="'+max+'" step="'+step+'"></label>'; }
   function bindControls() {
     var nodes = document.querySelectorAll('[data-setting]');
-    for (var i = 0; i < nodes.length; i += 1) nodes[i].oninput = function () { var path = this.getAttribute('data-setting'); setDeep(path, this.type === 'checkbox' ? this.checked : parseFloat(this.value)); if (path === 'master.width') settings.master.width = 1; refreshControls(); updateAudioParameter(path); };
-    var width = document.querySelector('[data-setting="master.width"]'); if (width) { width.disabled = true; width.value = 1; width.parentNode.title = 'Temporalmente no disponible'; }
+    for (var i = 0; i < nodes.length; i += 1) nodes[i].oninput = function () { var path = this.getAttribute('data-setting'); setDeep(path, this.type === 'checkbox' ? this.checked : parseFloat(this.value)); refreshControls(); updateAudioParameter(path); };
     refreshControls();
   }
   function refreshControls() { var nodes = document.querySelectorAll('[data-setting]'); for (var i = 0; i < nodes.length; i += 1) { var n = nodes[i], v = getDeep(n.getAttribute('data-setting')); if (n.type === 'checkbox') n.checked = !!v; else n.value = v; } var vals = document.querySelectorAll('[data-value]'); for (i = 0; i < vals.length; i += 1) vals[i].innerHTML = getDeep(vals[i].getAttribute('data-value')); }
   function save() { localStorage.setItem(STORE_KEY, JSON.stringify(settings)); byId('renderStatus').innerHTML = 'Ajustes guardados.'; }
-  function normalizeSettings() { settings.master.width = 1; }
+  function normalizeSettings() { settings.master.width = clampWidth(settings.master.width === undefined ? 1 : settings.master.width); }
   function restore() { var raw = localStorage.getItem(STORE_KEY); if (raw) settings = JSON.parse(raw); normalizeSettings(); refreshControls(); updateAllAudioParameters(); byId('renderStatus').innerHTML = raw ? 'Ajustes restaurados.' : 'No había ajustes guardados.'; }
   function initial() { settings = clone(defaults); refreshControls(); updateAllAudioParameters(); byId('renderStatus').innerHTML = 'Valores iniciales cargados.'; }
 
@@ -166,11 +187,16 @@
     setTimeout(function () { var sr = audioContext.sampleRate, ctx = new OfflineAudioContext(2, Math.ceil(duration() * sr), sr); buildGraph(ctx, 0, 0, renderMasterLevel); byId('renderProgress').value = 45; ctx.startRendering().then(function (b) { byId('renderProgress').value = 85; var blob = MicrophonWavEncoder.encodeWav(b.getChannelData(0), b.getChannelData(1), b.sampleRate); var url = URL.createObjectURL(blob); byId('downloadLink').href = url; byId('downloadLink').className = 'download ready'; byId('renderProgress').value = 100; byId('renderStatus').innerHTML = 'Render terminado: microphon_mix_60s.wav'; byId('renderBtn').disabled = false; }); }, 50);
   }
 
-  /* Read-only diagnostics for checking transport/source stability while moving controls. */
+  function matrixSample(left, right, width) {
+    var mid = (left + right) * 0.5, side = (left - right) * 0.5;
+    return { left: mid + side * width, right: mid - side * width, mid: mid, side: side * width };
+  }
+
+  /* Read-only diagnostics for matrix correctness and transport/source stability. */
   window.microphonMixerDiagnostics = function () {
-    var positions = [], i;
+    var positions = [], i, unity = matrixSample(0.75, -0.25, 1), mono = matrixSample(0.75, -0.25, 0), wide = matrixSample(0.75, -0.25, 1.5);
     if (graph) for (i = 0; i < trackDefs.length; i += 1) positions.push(currentPos());
-    return { playing: playing, position: currentPos(), sourceGeneration: sourceGeneration, activeSources: graph ? graph.sources.length : 0, tracksSynchronized: positions.length === 0 || Math.max.apply(Math, positions) - Math.min.apply(Math, positions) < 0.001, stereoWidth: 1, masterBypass: settings.master.bypass, mono: settings.master.mono };
+    return { playing: playing, position: currentPos(), sourceGeneration: sourceGeneration, activeSources: graph ? graph.sources.length : 0, tracksSynchronized: positions.length === 0 || Math.max.apply(Math, positions) - Math.min.apply(Math, positions) < 0.001, stereoWidth: settings.master.width, masterBypass: settings.master.bypass, mono: settings.master.mono, matrixChecks: { unityPreservesChannels: unity.left === 0.75 && unity.right === -0.25, zeroIsMono: mono.left === mono.right, widePreservesMid: wide.mid === unity.mid, wideSideRatio: wide.side / unity.side }, neonPunchDb: { body110Hz: punchBodyGain(settings.tracks.neon.punch), attack3200Hz: punchAttackGain(settings.tracks.neon.punch) } };
   };
 
   function boot() {
