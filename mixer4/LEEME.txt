@@ -1,0 +1,12 @@
+MICROPHON MIX 60s — 4 TRACK
+
+1. Descomprime la carpeta completa.
+2. Abre index.html en tu navegador.
+3. Pulsa “Cargar WAV” en entre 1 y 4 pistas.
+4. Espera a que los archivos terminen de cargar.
+5. Haz tu mezcla con los controles de cada pista.
+6. Elige escuchar MIX, MASTER VINYL o MASTER DIGITAL.
+7. Pulsa el botón “Renderizar” de la versión que quieras.
+8. Cuando aparezca el enlace, descarga el nuevo WAV.
+
+Conserva siempre tus WAV originales. La aplicación no los sustituye ni los envía fuera de tu ordenador.
