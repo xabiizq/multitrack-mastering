@@ -1,99 +1,70 @@
-# Microphon Mix 60s
+# MICROPHON MIX 60s
 
-Interfaz web local para mezclar `Evolving_Circles_RAW.wav`, `Sharp_Chorus_RAW.wav` y `Neon_GB_RAW.wav` desde el navegador, sin servidor, paquetes, frameworks ni servicios externos.
+Mezclador HTML local de `Evolving_Circles_RAW.wav`, `Sharp_Chorus_RAW.wav` y `Neon_GB_RAW.wav`. Mantiene un flujo inspirado en estudios analógicos de finales de los años 60: dinámica musical, transitorios naturales, saturación progresiva y escucha sin fatiga. No requiere paquetes, frameworks ni servicios externos.
 
 ## Abrir la aplicación
 
-La forma más compatible con navegadores antiguos es servir el repositorio con el servidor simple de Python:
+Desde la raíz del repositorio:
 
 ```bash
 python3 -m http.server 8000
 ```
 
-Después abre:
+Abre `http://localhost:8000/mixer/`. Algunos navegadores bloquean los WAV desde `file://`; el servidor local evita esa restricción y el audio no sale del ordenador.
 
-```text
-http://localhost:8000/mixer/
-```
+## Las tres rutas
 
-> Nota: algunos navegadores bloquean la carga de audio con `file://`. Si al abrir `mixer/index.html` directamente no cargan los WAV, usa el servidor local anterior. El audio nunca sale de tu ordenador.
+### 1. MIX
 
-## Uso básico
+`TRACKS → procesamiento de pistas → Tape Echo / Dark Chamber → suma → MIX BUS → MIX OUT`
 
-1. Espera a que el indicador muestre **“Tres WAV cargados y listos”**.
-2. Pulsa **Play** para reproducir las tres pistas sincronizadas.
-3. Usa la barra de posición para mover el cursor de reproducción.
-4. Pulsa **Stop** para detener la mezcla y volver al inicio.
-5. Ajusta cada canal:
-   - volumen;
-   - panorama;
-   - mute;
-   - solo;
-   - envíos disponibles a Tape Echo y/o Dark Chamber;
-   - saturación de cinta;
-   - presencia/punch en Neon GB.
-6. Ajusta los efectos globales y el master.
-7. Pulsa **Renderizar WAV** para generar la mezcla completa.
-8. Cuando termine el render, usa **Descargar WAV**. El archivo se descarga como `microphon_mix_60s.wav`.
+Es la mezcla artística principal. Conserva volumen, panorama independiente, mute/solo, saturación de cinta, envíos y efectos, Presencia/Punch de Neon GB, nivel, drive, anchura y protección del bus existentes. MIX OUT existe antes de los dos masterings y puede escucharse y renderizarse solo.
 
-## Valores iniciales
+La anchura usa una matriz Mid/Side equilibrada: `width = 1` conserva L/R, `width = 0` entrega mono centrado y hasta `1,5` aumenta moderadamente SIDE sin desplazar MID. Los cambios de controles actualizan los `AudioParam` del grafo activo con rampas cortas; no recrean las fuentes ni reinician el transporte.
 
-Los valores iniciales siguen la intención de `process_audio.py`:
+Presencia/Punch de Neon GB mantiene dos bandas: cuerpo a **110 Hz** (hasta +4 dB) y ataque a **3,2 kHz** (hasta +6 dB). Cero es neutro. Está antes de volumen y panorama, y pertenece a la lógica compartida de escucha y render.
 
-- Evolving Circles: -1.6 dB, panorama 23 % derecha, saturación suave, Tape Echo 430 ms con feedback moderado y repeticiones oscuras, más cámara oscura.
-- Sharp Chorus: -6.2 dB, panorama 23 % izquierda, soporte armónico con cámara secundaria y saturación cálida.
-- Neon GB: -1.2 dB, centro, nivel aumentado +3 dB respecto a la versión previa, saturación mínima y presencia/punch suave.
-- Master: techo aproximado de -1 dBFS, limitación conservadora, drive ligero y anchura estéreo neutra en 1,0.
+### 2. MASTER VINYL
 
-## Persistencia
+`MIX BUS → control SIDE de graves → tonal shaping → cinta suave → glue → control de picos → VINYL OUT`
 
-- **Guardar ajustes** almacena la configuración en `localStorage` del navegador.
-- **Restaurar ajustes** recupera la configuración guardada.
-- **Valores iniciales** vuelve a los parámetros base de la mezcla actual.
+Esta ruta parte exactamente de MIX OUT sin modificar la mezcla original. Una matriz M/S conserva MID intacto y aplica al SIDE un *low shelf* progresivo de −9 dB alrededor de 130 Hz. No elimina graves ni convierte bruscamente la mezcla a mono. Después utiliza un pasa-altos suave a 24 Hz para subgrave técnico, una reducción de agudos de 1,2 dB desde 10,5 kHz, saturación de cinta mínima, compresión glue 1,6:1 con ataque de 35 ms y protección de picos moderada. No genera clicks, crackle, ruido de superficie, normalización ni maximización agresiva.
 
-## Qué procesa el render
+El WAV de vinilo **no lleva curva RIAA**. Esta preparación conservadora no sustituye las decisiones finales de la planta de corte; la ecualización RIAA corresponde al proceso de corte/reproducción y no debe imprimirse como EQ permanente en el master WAV entregado.
 
-El render usa `OfflineAudioContext` y aplica los mismos controles audibles de la reproducción:
+### 3. MASTER DIGITAL
 
-- niveles y panoramas por canal;
-- mute y solo;
-- Tape Echo con tiempo, feedback, filtro oscuro y wet global;
-- Dark Chamber con cantidad, duración y tono oscuro;
-- saturación por canal;
-- presencia/punch de dos bandas para Neon GB;
-- nivel, drive, limitador, anchura estéreo, bypass y escucha mono del master.
+`MIX BUS → tonal shaping → cinta suave → glue → control final de picos → DIGITAL OUT`
 
-El nivel master del render es exactamente el mismo `settings.master.level` que se oye durante la reproducción. Se aplica mediante un `GainNode` explícito entre el drive master y el limitador, sin normalización posterior ni corrección automática de pico: aumentar el master eleva el RMS mientras haya margen y, al llegar al techo, hace trabajar más al limitador.
+Es una alternativa para Spotify, Apple Music, YouTube y WAV digital que conserva la estética de los años 60. Aplica pasa-altos suave a 20 Hz, atenuación de solo 0,5 dB desde 12 kHz, saturación mínima, glue 1,8:1 con ataque de 25 ms y una protección final más precisa que Vinyl. No fija un objetivo LUFS, no normaliza y no busca volumen de *loudness war*.
 
-### Presencia / punch de Neon GB
+## Escucha y comparación
 
-El control combina dos ecualizadores de campana en serie: un refuerzo de cuerpo y pegada alrededor de **110 Hz** (Q 0,8, hasta +4 dB) y otro de ataque y definición alrededor de **3,2 kHz** (Q 0,9, hasta +6 dB). En `0` ambos son neutros; en `0,5` aplican aproximadamente +2 dB y +3 dB; y en `1` alcanzan +4 dB y +6 dB. Así cambia específicamente la pegada y el ataque, sin subir el volumen base de Neon GB ni usar compresión agresiva.
+**ESCUCHAR: MIX / MASTER VINYL / MASTER DIGITAL** selecciona una sola ruta. La conmutación cruza las ganancias durante unos 45 ms: no llama a `stop()`, `play()` o `seek()`, no recrea `BufferSourceNode` y no reconstruye el grafo. La escucha mono se aplica solo al monitor, después del selector.
 
-Los dos filtros forman parte tanto del grafo en tiempo real como del grafo de render offline. Al mover el control se actualizan sus `AudioParam` con una transición de 20 ms, sin reconstruir el grafo, reiniciar las fuentes ni alterar panorama o sincronización.
+No existe compensación automática de ganancia. Para una comparación crítica hay que tener en cuenta que una señal más alta puede percibirse como mejor aunque no lo sea.
 
-No se genera MP3 y no se sobrescriben los WAV RAW originales.
+## Medición
 
-### Corrección del panorama por pista
+Cada pista muestra **VU + PEAK**. MIX tiene L/R antes de cualquier mastering; VINYL L/R y DIGITAL L/R están después de sus cadenas completas.
 
-Cada canal dispone de un nodo de panorama estéreo propio con ley *equal-power*: `-1` envía la pista completamente a la izquierda, `0` la mantiene centrada y `+1` la envía completamente a la derecha. El panorama se aplica antes de alimentar Tape Echo y Dark Chamber y antes de sumar la pista al master, por lo que ambos buses conservan la posición estéreo de la señal de origen y ajustar un canal no modifica los demás.
+- **VU** calcula RMS de cada bloque de 1024 muestras y aplica balística distinta para subida y bajada. Representa energía media, no un pico ralentizado. **0 VU = −18 dBFS**, nivel nominal de trabajo de este mezclador; la lectura numérica se expresa respecto a 0 VU.
+- **PEAK** busca la muestra de mayor valor absoluto del bloque, responde inmediatamente, la mantiene 700 ms y después cae. La lectura está en dBFS. Cuando alcanza `>= 0 dBFS`, el instrumento se ilumina claramente en rojo.
 
-### Anchura estéreo del master
+Los `AnalyserNode` son derivaciones de solo medición. La lectura y el dibujo ocurren con `requestAnimationFrame`, fuera del camino DSP, y no reconstruyen el grafo.
 
-La anchura usa una matriz estéreo Mid/Side matemáticamente equilibrada: `mid = (L + R) / 2`, `side = (L - R) / 2`, `outputL = mid + side × width` y `outputR = mid - side × width`. Se implementa con `GainNode`, `ChannelSplitter` y `ChannelMerger`: no modifica la componente central ni los panoramas individuales.
+## Exportación
 
-El rango es **0–1,5**. `1,0` es completamente neutro y reconstruye exactamente los canales L/R originales; `0` elimina la componente lateral y entrega mono centrado; los valores entre `1,0` y `1,5` amplían moderadamente la imagen. La matriz permanente se usa tanto en tiempo real como en `OfflineAudioContext`, y el parámetro lateral se suaviza durante 20 ms al mover el control, sin reconstruir fuentes ni reiniciar el transporte. Bypass master y escucha mono conservan sus rutas permanentes y siguen conmutándose de forma suave.
+Los tres botones crean respectivamente:
 
-### Reproducción en tiempo real
+- `microphon_mix.wav`: solamente MIX;
+- `microphon_master_vinyl.wav`: MIX + MASTER VINYL;
+- `microphon_master_digital.wav`: MIX + MASTER DIGITAL.
 
-El grafo de Web Audio permanece activo durante toda la reproducción. Los faders y conmutadores actualizan directamente los `AudioParam` de los nodos existentes, sin detener las fuentes, volver a crear `BufferSourceNode` ni mover el transporte. Volumen, panorama, mute/solo, envíos, efectos y master se aplican prácticamente al instante.
+Todos usan el mismo constructor DSP que la escucha, los valores actuales, inicio cero, el mismo sample rate y exactamente el mismo número de frames. Conservan sincronización, panorama y efectos. No hay normalización posterior. Tras cada render la interfaz muestra duración, sample rate, peak L/R y RMS L/R; no etiqueta RMS como LUFS.
 
-Los parámetros compatibles usan `cancelScheduledValues()` y `setTargetAtTime()` con una transición corta de 20 ms para evitar clics y *zipper noise*. Bypass master y escucha mono usan rutas permanentes con ganancias cruzadas suavemente; al volver a estéreo se recuperan los panoramas originales sin reconstruir la reproducción.
+El encoder produce PCM estéreo de 16 bits. `OfflineAudioContext` no expone progreso muestra a muestra, por lo que la barra solo indica fases. Tape Echo y Dark Chamber son modelos sencillos y estables de Web Audio, no emulaciones exactas de hardware.
 
-Para una comprobación durante el desarrollo, la consola del navegador expone `microphonMixerDiagnostics()`. Su resultado permite observar la posición, la generación de fuentes, el número de fuentes activas y la sincronización: al mover anchura, punch u otros controles, `sourceGeneration` debe permanecer constante, `activeSources` debe seguir en tres y `tracksSynchronized` debe ser `true`. `matrixChecks` verifica además que anchura 1 conserva L/R, 0 produce mono y 1,5 multiplica solamente la componente lateral; `neonPunchDb` muestra en dB los refuerzos activos a 110 Hz y 3,2 kHz.
+## Ajustes y diagnóstico
 
-## Limitaciones conocidas
-
-- El render WAV exporta PCM estéreo de 16 bits para mantener el encoder pequeño y compatible con navegadores antiguos.
-- La barra de progreso indica fases del render; Web Audio no expone progreso sample a sample durante `OfflineAudioContext.startRendering()`.
-- El Tape Echo y la Dark Chamber son modelos estables y sencillos de Web Audio, inspirados en flujo analógico, no emulaciones exactas de hardware.
-- Si el navegador no permite `OfflineAudioContext` o `decodeAudioData` para WAV locales, usa un navegador compatible con Web Audio API y abre la app desde `http://localhost`.
+Guardar/Restaurar usa `localStorage`; Valores iniciales recupera los valores previos del mezclador. `microphonMixerDiagnostics()` permite comprobar en la consola la ruta de escucha, generación y número de fuentes, referencia VU, duración del peak hold, topología de salidas, matriz de anchura y bandas de Punch. Al mover un fader o cambiar escucha, `sourceGeneration` permanece constante.
