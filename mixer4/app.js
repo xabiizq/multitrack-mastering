@@ -12,10 +12,10 @@
   ];
   var defaults = {
     tracks: {
-      track1: { volume: 0, pan: 0, mute: false, solo: false, echoSend: 0, chamberSend: 0, saturation: 1.01 },
-      track2: { volume: 0, pan: 0, mute: false, solo: false, echoSend: 0, chamberSend: 0, saturation: 1.01 },
-      track3: { volume: 0, pan: 0, mute: false, solo: false, echoSend: 0, chamberSend: 0, saturation: 1.01 },
-      track4: { volume: 0, pan: 0, mute: false, solo: false, echoSend: 0, chamberSend: 0, saturation: 1.01 }
+      track1: { volume: 0, pan: 0, presence: 0, mute: false, solo: false, echoSend: 0, chamberSend: 0, saturation: 1.01 },
+      track2: { volume: 0, pan: 0, presence: 0, mute: false, solo: false, echoSend: 0, chamberSend: 0, saturation: 1.01 },
+      track3: { volume: 0, pan: 0, presence: 0, mute: false, solo: false, echoSend: 0, chamberSend: 0, saturation: 1.01 },
+      track4: { volume: 0, pan: 0, presence: 0, mute: false, solo: false, echoSend: 0, chamberSend: 0, saturation: 1.01 }
     },
     effects: { echo: { wet: 1, time: 430, feedback: 0.3, dark: 2750 }, chamber: { wet: 1, duration: 1.8, tone: 3600 } },
     master: { level: 0, drive: 1.01, width: 1, ceiling: -1, bypass: false, mono: false }
@@ -43,6 +43,27 @@
   function anyTrackSoloed() { for (var i = 0; i < trackDefs.length; i += 1) if (buffers[trackDefs[i].id] && settings.tracks[trackDefs[i].id].solo) return true; return false; }
   function audibleTrackGain(id, anySolo) { var s = settings.tracks[id]; return (s.mute || (anySolo && !s.solo)) ? 0 : dbToGain(s.volume); }
 
+  function presenceValues(value) {
+    var amount = Math.max(-1, Math.min(1, Number(value) || 0)), soft = Math.max(0, -amount), forward = Math.max(0, amount);
+    return { eq: amount * 2.1, attack: forward * 0.095, threshold: soft ? -20 : 0, ratio: 1 + soft * 0.65, makeup: dbToGain(-forward * 0.65 + soft * 0.2) };
+  }
+
+  /* A broad presence contour plus a very low, filtered parallel path suggests articulation;
+     the negative half gently rounds attacks. All paths are exact unity/bypass at zero. */
+  function buildPresence(ctx, input, value) {
+    var n = {}, v = presenceValues(value);
+    n.eq = ctx.createBiquadFilter(); n.eq.type = 'peaking'; n.eq.frequency.value = 3300; n.eq.Q.value = 0.55; n.eq.gain.value = v.eq;
+    n.round = ctx.createDynamicsCompressor(); n.round.threshold.value = v.threshold; n.round.knee.value = 14; n.round.ratio.value = v.ratio; n.round.attack.value = 0.004; n.round.release.value = 0.12;
+    n.attackFilter = ctx.createBiquadFilter(); n.attackFilter.type = 'highpass'; n.attackFilter.frequency.value = 1900; n.attackFilter.Q.value = 0.45;
+    n.attackGain = ctx.createGain(); n.attackGain.gain.value = v.attack; n.makeup = ctx.createGain(); n.makeup.gain.value = v.makeup;
+    input.connect(n.eq); n.eq.connect(n.round); n.round.connect(n.makeup); n.eq.connect(n.attackFilter); n.attackFilter.connect(n.attackGain); n.attackGain.connect(n.makeup); n.output = n.makeup;
+    return n;
+  }
+
+  function updatePresenceNodes(nodes, value, ctx) {
+    var v = presenceValues(value); smooth(nodes.eq.gain, v.eq, ctx); smooth(nodes.attackGain.gain, v.attack, ctx); smooth(nodes.round.threshold, v.threshold, ctx); smooth(nodes.round.ratio, v.ratio, ctx); smooth(nodes.makeup.gain, v.makeup, ctx);
+  }
+
   function buildWidth(ctx, input, width) {
     var n = {}, monoNodes;
     n.splitter = ctx.createChannelSplitter(2); n.mid = ctx.createGain(); n.sideL = ctx.createGain(); n.sideR = ctx.createGain(); n.side = ctx.createGain(); n.invert = ctx.createGain(); n.output = ctx.createChannelMerger(2);
@@ -57,23 +78,28 @@
     var n = {}, ms = buildWidth(ctx, input, 1);
     /* A low shelf only on SIDE progressively reduces lateral bass while MID remains untouched. */
     n.sideBass = ctx.createBiquadFilter(); n.sideBass.type = 'lowshelf'; n.sideBass.frequency.value = 130; n.sideBass.gain.value = -9;
-    ms.side.disconnect(); ms.side.connect(n.sideBass); n.sideBass.connect(ms.output, 0, 0); n.sideBass.connect(ms.invert); ms.invert.connect(ms.output, 0, 1);
+    ms.side.disconnect(); ms.side.connect(n.sideBass); n.sideBass.connect(ms.output, 0, 0); n.sideBass.connect(ms.invert);
     n.sub = ctx.createBiquadFilter(); n.sub.type = 'highpass'; n.sub.frequency.value = 24; n.sub.Q.value = 0.5;
-    n.top = ctx.createBiquadFilter(); n.top.type = 'highshelf'; n.top.frequency.value = 10500; n.top.gain.value = -1.2;
-    n.tape = ctx.createWaveShaper(); n.tape.curve = makeCurve(1.035, 0.012); n.tape.oversample = '2x';
-    n.glue = ctx.createDynamicsCompressor(); n.glue.threshold.value = -16; n.glue.knee.value = 12; n.glue.ratio.value = 1.6; n.glue.attack.value = 0.035; n.glue.release.value = 0.3;
-    n.peak = ctx.createDynamicsCompressor(); n.peak.threshold.value = -1.5; n.peak.knee.value = 3; n.peak.ratio.value = 4; n.peak.attack.value = 0.004; n.peak.release.value = 0.16;
-    ms.output.connect(n.sub); n.sub.connect(n.top); n.top.connect(n.tape); n.tape.connect(n.glue); n.glue.connect(n.peak); n.output = n.peak; n.width = ms; return n;
+    n.top = ctx.createBiquadFilter(); n.top.type = 'highshelf'; n.top.frequency.value = 9000; n.top.gain.value = -2;
+    n.workLevel = ctx.createGain(); n.workLevel.gain.value = dbToGain(5);
+    n.tape = ctx.createWaveShaper(); n.tape.curve = makeCurve(1.16, 0.018); n.tape.oversample = '2x';
+    n.glue = ctx.createDynamicsCompressor(); n.glue.threshold.value = -11; n.glue.knee.value = 10; n.glue.ratio.value = 1.65; n.glue.attack.value = 0.035; n.glue.release.value = 0.32;
+    /* Restore working gain and the shaper's small-signal gain: this is tone, not loudness. */
+    n.restoreLevel = ctx.createGain(); n.restoreLevel.gain.value = dbToGain(-7.7);
+    n.peak = ctx.createDynamicsCompressor(); n.peak.threshold.value = -3; n.peak.knee.value = 4; n.peak.ratio.value = 3; n.peak.attack.value = 0.006; n.peak.release.value = 0.18;
+    ms.output.connect(n.sub); n.sub.connect(n.top); n.top.connect(n.workLevel); n.workLevel.connect(n.tape); n.tape.connect(n.glue); n.glue.connect(n.restoreLevel); n.restoreLevel.connect(n.peak); n.output = n.peak; n.width = ms; return n;
   }
 
   function buildDigitalMaster(ctx, input) {
     var n = {};
     n.sub = ctx.createBiquadFilter(); n.sub.type = 'highpass'; n.sub.frequency.value = 20; n.sub.Q.value = 0.5;
     n.top = ctx.createBiquadFilter(); n.top.type = 'highshelf'; n.top.frequency.value = 12000; n.top.gain.value = -0.5;
-    n.tape = ctx.createWaveShaper(); n.tape.curve = makeCurve(1.025, 0.008); n.tape.oversample = '2x';
-    n.glue = ctx.createDynamicsCompressor(); n.glue.threshold.value = -15; n.glue.knee.value = 10; n.glue.ratio.value = 1.8; n.glue.attack.value = 0.025; n.glue.release.value = 0.22;
-    n.peak = ctx.createDynamicsCompressor(); n.peak.threshold.value = -1; n.peak.knee.value = 1.5; n.peak.ratio.value = 12; n.peak.attack.value = 0.002; n.peak.release.value = 0.12;
-    input.connect(n.sub); n.sub.connect(n.top); n.top.connect(n.tape); n.tape.connect(n.glue); n.glue.connect(n.peak); n.output = n.peak; return n;
+    n.workLevel = ctx.createGain(); n.workLevel.gain.value = dbToGain(3);
+    n.tape = ctx.createWaveShaper(); n.tape.curve = makeCurve(1.06, 0.009); n.tape.oversample = '2x';
+    n.glue = ctx.createDynamicsCompressor(); n.glue.threshold.value = -10; n.glue.knee.value = 12; n.glue.ratio.value = 1.35; n.glue.attack.value = 0.05; n.glue.release.value = 0.24;
+    n.restoreLevel = ctx.createGain(); n.restoreLevel.gain.value = dbToGain(-5.6);
+    n.peak = ctx.createDynamicsCompressor(); n.peak.threshold.value = -2.5; n.peak.knee.value = 3; n.peak.ratio.value = 6; n.peak.attack.value = 0.003; n.peak.release.value = 0.13;
+    input.connect(n.sub); n.sub.connect(n.top); n.top.connect(n.workLevel); n.workLevel.connect(n.tape); n.tape.connect(n.glue); n.glue.connect(n.restoreLevel); n.restoreLevel.connect(n.peak); n.output = n.peak; return n;
   }
 
   function attachMeter(ctx, source, id, channel) {
@@ -110,7 +136,7 @@
       n.source = ctx.createBufferSource(); n.saturation = ctx.createWaveShaper(); n.volume = ctx.createGain(); n.pan = ctx.createStereoPanner(); n.echoSend = ctx.createGain(); n.chamberSend = ctx.createGain();
       n.source.buffer = buffers[t.id]; n.saturation.curve = makeCurve(s.saturation);
       n.volume.gain.value = audibleTrackGain(t.id, anySolo); n.pan.pan.value = s.pan; n.echoSend.gain.value = s.echoSend; n.chamberSend.gain.value = s.chamberSend;
-      n.source.connect(n.saturation); n.saturation.connect(n.volume); n.volume.connect(n.pan); n.pan.connect(g.mixIn); n.pan.connect(n.echoSend); n.echoSend.connect(g.echoDelay); n.pan.connect(n.chamberSend); n.chamberSend.connect(g.chamberDelay);
+      n.source.connect(n.saturation); n.presence = buildPresence(ctx, n.saturation, s.presence); n.presence.output.connect(n.volume); n.volume.connect(n.pan); n.pan.connect(g.mixIn); n.pan.connect(n.echoSend); n.echoSend.connect(g.echoDelay); n.pan.connect(n.chamberSend); n.chamberSend.connect(g.chamberDelay);
       if (options.realtime) attachMeter(ctx, n.pan, 'track-' + t.id); if (pos < buffers[t.id].duration) { n.source.start(when, pos); g.sources.push(n.source); } g.tracks[t.id] = n;
     });
 
@@ -126,7 +152,7 @@
   function updateTrackGains() { if (!graph) return; var solo = anyTrackSoloed(); trackDefs.forEach(function (t) { if (graph.tracks[t.id]) smooth(graph.tracks[t.id].volume.gain, audibleTrackGain(t.id, solo), graph.context); }); }
   function updateAudioParameter(path) {
     if (!graph || graph.context !== audioContext) return; var p = path.split('.'), t, s;
-    if (p[0] === 'tracks') { t = graph.tracks[p[1]]; s = settings.tracks[p[1]]; if (!t) return; if (p[2] === 'volume' || p[2] === 'mute' || p[2] === 'solo') updateTrackGains(); else if (p[2] === 'pan') smooth(t.pan.pan, s.pan, audioContext); else if (p[2] === 'echoSend') smooth(t.echoSend.gain, s.echoSend, audioContext); else if (p[2] === 'chamberSend') smooth(t.chamberSend.gain, s.chamberSend, audioContext); else if (p[2] === 'saturation') t.saturation.curve = makeCurve(s.saturation); }
+    if (p[0] === 'tracks') { t = graph.tracks[p[1]]; s = settings.tracks[p[1]]; if (!t) return; if (p[2] === 'volume' || p[2] === 'mute' || p[2] === 'solo') updateTrackGains(); else if (p[2] === 'pan') smooth(t.pan.pan, s.pan, audioContext); else if (p[2] === 'presence') updatePresenceNodes(t.presence, s.presence, audioContext); else if (p[2] === 'echoSend') smooth(t.echoSend.gain, s.echoSend, audioContext); else if (p[2] === 'chamberSend') smooth(t.chamberSend.gain, s.chamberSend, audioContext); else if (p[2] === 'saturation') t.saturation.curve = makeCurve(s.saturation); }
     else if (path === 'effects.echo.wet') smooth(graph.echoReturn.gain, settings.effects.echo.wet, audioContext); else if (path === 'effects.echo.time') smooth(graph.echoDelay.delayTime, settings.effects.echo.time / 1000, audioContext); else if (path === 'effects.echo.feedback') smooth(graph.echoFeedback.gain, settings.effects.echo.feedback, audioContext); else if (path === 'effects.echo.dark') smooth(graph.echoFilter.frequency, settings.effects.echo.dark, audioContext); else if (path === 'effects.chamber.wet') smooth(graph.chamberReturn.gain, settings.effects.chamber.wet, audioContext); else if (path === 'effects.chamber.duration') { smooth(graph.chamberDelay.delayTime, settings.effects.chamber.duration / 10, audioContext); smooth(graph.chamberFeedback.gain, Math.min(0.72, settings.effects.chamber.duration / 5), audioContext); } else if (path === 'effects.chamber.tone') smooth(graph.chamberFilter.frequency, settings.effects.chamber.tone, audioContext);
     else if (path === 'master.level') smooth(graph.masterGain.gain, dbToGain(settings.master.level), audioContext); else if (path === 'master.drive') graph.masterDrive.curve = makeCurve(settings.master.drive); else if (path === 'master.ceiling') smooth(graph.compressor.threshold, settings.master.ceiling, audioContext); else if (path === 'master.width') smooth(graph.width.side.gain, clampWidth(settings.master.width), audioContext); else if (path === 'master.bypass') { smooth(graph.processedGain.gain, settings.master.bypass ? 0 : 1, audioContext); smooth(graph.bypassGain.gain, settings.master.bypass ? 1 : 0, audioContext); } else if (path === 'master.mono') { smooth(graph.stereoMonitorGain.gain, settings.master.mono ? 0 : 1, audioContext); smooth(graph.monoMonitorGain.gain, settings.master.mono ? 1 : 0, audioContext); }
   }
@@ -147,7 +173,7 @@
   function updateMeters(now) { Object.keys(meterStates).forEach(function (id) { var s = meterStates[id], sum = 0, peak = 0, i, x, rms; s.analyser.getFloatTimeDomainData(s.data); for (i = 0; i < s.data.length; i += 1) { x = Math.abs(s.data[i]); sum += x * x; if (x > peak) peak = x; } rms = Math.sqrt(sum / s.data.length); s.vu += (rms - s.vu) * (rms > s.vu ? 0.18 : 0.07); if (peak >= s.held) { s.held = peak; s.holdUntil = now + 700; } else if (now > s.holdUntil) s.held *= 0.93; paintMeter(id, s); }); }
   function resetMeters() { document.querySelectorAll('.meter-unit').forEach(function (el) { el.querySelector('.vu-fill').style.width = '0'; el.querySelector('.peak-fill').style.width = '0'; el.querySelectorAll('output').forEach(function (o) { o.textContent = '−∞'; }); el.classList.remove('clipping'); }); }
 
-  function addChannel(def) { var el = document.createElement('article'); el.id = 'channel-' + def.id; el.className = 'channel panel empty'; el.innerHTML = '<h2>'+def.name+'</h2><p class="track-name" id="name-'+def.id+'">Sin pista</p><label class="load-label">Cargar WAV<input id="file-'+def.id+'" type="file" accept=".wav,audio/wav"></label>'+meterHtml('track-'+def.id, 'CANAL')+'<div class="channel-controls">'+control('Volumen dB','tracks.'+def.id+'.volume',-24,6,.1)+control('Panorama','tracks.'+def.id+'.pan',-1,1,.01)+'<div class="mini-buttons"><label class="switch"><input data-setting="tracks.'+def.id+'.mute" type="checkbox"> Mute</label><label class="switch"><input data-setting="tracks.'+def.id+'.solo" type="checkbox"> Solo</label></div>'+control('Envío Tape Echo','tracks.'+def.id+'.echoSend',0,1,.01)+control('Envío Dark Chamber','tracks.'+def.id+'.chamberSend',0,1,.01)+control('Saturación cinta','tracks.'+def.id+'.saturation',1,3,.01)+'</div>'; byId('channels').appendChild(el); byId('file-'+def.id).onchange=function(){if(this.files[0])loadFile(def,this.files[0]);}; setChannelEnabled(def.id, false); }
+  function addChannel(def) { var el = document.createElement('article'); el.id = 'channel-' + def.id; el.className = 'channel panel empty'; el.innerHTML = '<h2>'+def.name+'</h2><p class="track-name" id="name-'+def.id+'">Sin pista</p><label class="load-label">Cargar WAV<input id="file-'+def.id+'" type="file" accept=".wav,audio/wav"></label>'+meterHtml('track-'+def.id, 'CANAL')+'<div class="channel-controls">'+control('Volumen dB','tracks.'+def.id+'.volume',-24,6,.1)+control('Panorama','tracks.'+def.id+'.pan',-1,1,.01)+control('Presencia / Ataque','tracks.'+def.id+'.presence',-1,1,.01)+'<div class="presence-scale"><span>SUAVE</span><span>NEUTRO</span><span>PRESENTE</span></div><div class="mini-buttons"><label class="switch"><input data-setting="tracks.'+def.id+'.mute" type="checkbox"> Mute</label><label class="switch"><input data-setting="tracks.'+def.id+'.solo" type="checkbox"> Solo</label></div>'+control('Envío Tape Echo','tracks.'+def.id+'.echoSend',0,1,.01)+control('Envío Dark Chamber','tracks.'+def.id+'.chamberSend',0,1,.01)+control('Saturación cinta','tracks.'+def.id+'.saturation',1,3,.01)+'</div>'; byId('channels').appendChild(el); byId('file-'+def.id).onchange=function(){if(this.files[0])loadFile(def,this.files[0]);}; setChannelEnabled(def.id, false); }
   function setChannelEnabled(id, enabled) { var el=byId('channel-'+id), controls=el.querySelectorAll('.channel-controls input'); el.classList.toggle('empty',!enabled); for(var i=0;i<controls.length;i+=1)controls[i].disabled=!enabled; }
   function loadedCount(){var n=0;trackDefs.forEach(function(t){if(buffers[t.id])n+=1;});return n;}
   function updateAvailability(){var count=loadedCount(),enabled=count>0;document.querySelectorAll('[data-audio-action]').forEach(function(el){el.disabled=!enabled;});byId('loadStatus').textContent=count?count+' pista'+(count===1?'':'s')+' cargada'+(count===1?'':'s')+' · listo':'Selecciona de 1 a 4 WAV';updateTime();}
@@ -156,10 +182,10 @@
   function control(label,path,min,max,step) { return '<label>'+label+' <span class="value" data-value="'+path+'"></span><input data-setting="'+path+'" type="range" min="'+min+'" max="'+max+'" step="'+step+'"></label>'; }
   function bindControls() { var nodes=document.querySelectorAll('[data-setting]'); for(var i=0;i<nodes.length;i+=1) nodes[i].oninput=function(){var path=this.getAttribute('data-setting');setDeep(path,this.type==='checkbox'?this.checked:parseFloat(this.value));refreshControls();updateAudioParameter(path);}; refreshControls(); }
   function refreshControls() { var nodes=document.querySelectorAll('[data-setting]'),i;for(i=0;i<nodes.length;i+=1){var n=nodes[i],v=getDeep(n.getAttribute('data-setting'));if(n.type==='checkbox')n.checked=!!v;else n.value=v;}var vals=document.querySelectorAll('[data-value]');for(i=0;i<vals.length;i+=1)vals[i].innerHTML=getDeep(vals[i].getAttribute('data-value')); }
-  function save(){localStorage.setItem(STORE_KEY,JSON.stringify(settings));byId('renderStatus').innerHTML='Ajustes guardados.';} function normalizeSettings(){settings.master.width=clampWidth(settings.master.width===undefined?1:settings.master.width);} function restore(){var raw=localStorage.getItem(STORE_KEY);if(raw)settings=JSON.parse(raw);normalizeSettings();refreshControls();updateAllAudioParameters();byId('renderStatus').innerHTML=raw?'Ajustes restaurados.':'No había ajustes guardados.';} function initial(){settings=clone(defaults);refreshControls();updateAllAudioParameters();byId('renderStatus').innerHTML='Valores iniciales cargados.';}
+  function save(){localStorage.setItem(STORE_KEY,JSON.stringify(settings));byId('renderStatus').innerHTML='Ajustes guardados.';} function normalizeSettings(){settings.master.width=clampWidth(settings.master.width===undefined?1:settings.master.width);trackDefs.forEach(function(t){if(settings.tracks[t.id].presence===undefined)settings.tracks[t.id].presence=0;});} function restore(){var raw=localStorage.getItem(STORE_KEY);if(raw)settings=JSON.parse(raw);normalizeSettings();refreshControls();updateAllAudioParameters();byId('renderStatus').innerHTML=raw?'Ajustes restaurados.':'No había ajustes guardados.';} function initial(){settings=clone(defaults);refreshControls();updateAllAudioParameters();byId('renderStatus').innerHTML='Valores iniciales cargados.';}
 
-  function analyseBuffer(b) { var result = { duration: b.duration, sampleRate: b.sampleRate, peak: [0,0], rms: [0,0] }; for (var c=0;c<2;c+=1){var data=b.getChannelData(c),sum=0,p=0;for(var i=0;i<data.length;i+=1){var a=Math.abs(data[i]);sum+=data[i]*data[i];if(a>p)p=a;}result.peak[c]=gainToDb(p);result.rms[c]=gainToDb(Math.sqrt(sum/data.length));}return result; }
-  function render(route) { if (!loadedCount()) return; var buttons=document.querySelectorAll('[data-render]'),masterLevel=settings.master.level,names={mix:'microphon_mix.wav',vinyl:'microphon_master_vinyl.wav',digital:'microphon_master_digital.wav'};buttons.forEach(function(b){b.disabled=true;});byId('renderProgress').value=10;byId('renderStatus').innerHTML='Renderizando '+route.toUpperCase()+'…';setTimeout(function(){var sr=audioContext.sampleRate,ctx=new OfflineAudioContext(2,Math.ceil(duration()*sr),sr);buildGraph(ctx,0,0,{route:route,masterLevel:masterLevel});byId('renderProgress').value=45;ctx.startRendering().then(function(b){var stats=analyseBuffer(b),blob=MicrophonWavEncoder.encodeWav(b.getChannelData(0),b.getChannelData(1),b.sampleRate),url=URL.createObjectURL(blob),link=byId('download-'+route);link.href=url;link.download=names[route];link.className='download ready';byId('renderProgress').value=100;byId('renderStatus').innerHTML=route.toUpperCase()+': '+stats.duration.toFixed(3)+' s · '+stats.sampleRate+' Hz · Peak L/R '+stats.peak[0].toFixed(2)+' / '+stats.peak[1].toFixed(2)+' dBFS · RMS L/R '+stats.rms[0].toFixed(2)+' / '+stats.rms[1].toFixed(2)+' dBFS';buttons.forEach(function(btn){btn.disabled=false;});}).catch(function(){byId('renderStatus').textContent='No se pudo renderizar.';buttons.forEach(function(btn){btn.disabled=false;});});},50); }
+  function analyseBuffer(b) { var result = { duration: b.duration, sampleRate: b.sampleRate, peak: [0,0], rms: [0,0], mid: 0, side: 0 }, left=b.getChannelData(0),right=b.getChannelData(1),midSum=0,sideSum=0; for (var c=0;c<2;c+=1){var data=b.getChannelData(c),sum=0,p=0;for(var i=0;i<data.length;i+=1){var a=Math.abs(data[i]);sum+=data[i]*data[i];if(a>p)p=a;}result.peak[c]=gainToDb(p);result.rms[c]=gainToDb(Math.sqrt(sum/data.length));}for(var j=0;j<left.length;j+=1){var mid=(left[j]+right[j])*.5,side=(left[j]-right[j])*.5;midSum+=mid*mid;sideSum+=side*side;}result.mid=gainToDb(Math.sqrt(midSum/left.length));result.side=gainToDb(Math.sqrt(sideSum/left.length));result.sideMid=result.side-result.mid;return result; }
+  function render(route) { if (!loadedCount()) return; var buttons=document.querySelectorAll('[data-render]'),masterLevel=settings.master.level,names={mix:'microphon_mix.wav',vinyl:'microphon_master_vinyl.wav',digital:'microphon_master_digital.wav'};buttons.forEach(function(b){b.disabled=true;});byId('renderProgress').value=10;byId('renderStatus').innerHTML='Renderizando '+route.toUpperCase()+'…';setTimeout(function(){var sr=audioContext.sampleRate,ctx=new OfflineAudioContext(2,Math.ceil(duration()*sr),sr);buildGraph(ctx,0,0,{route:route,masterLevel:masterLevel});byId('renderProgress').value=45;ctx.startRendering().then(function(b){var stats=analyseBuffer(b),blob=MicrophonWavEncoder.encodeWav(b.getChannelData(0),b.getChannelData(1),b.sampleRate),url=URL.createObjectURL(blob),link=byId('download-'+route);link.href=url;link.download=names[route];link.className='download ready';byId('renderProgress').value=100;byId('renderStatus').innerHTML=route.toUpperCase()+': '+stats.duration.toFixed(3)+' s · '+stats.sampleRate+' Hz · Peak L/R '+stats.peak[0].toFixed(2)+' / '+stats.peak[1].toFixed(2)+' dBFS · RMS L/R '+stats.rms[0].toFixed(2)+' / '+stats.rms[1].toFixed(2)+' dBFS · Mid '+stats.mid.toFixed(2)+' · Side '+stats.side.toFixed(2)+' · Side/Mid '+stats.sideMid.toFixed(2)+' dB';buttons.forEach(function(btn){btn.disabled=false;});}).catch(function(){byId('renderStatus').textContent='No se pudo renderizar.';buttons.forEach(function(btn){btn.disabled=false;});});},50); }
 
   function matrixSample(left,right,width){var mid=(left+right)*.5,side=(left-right)*.5;return{left:mid+side*width,right:mid-side*width,mid:mid,side:side*width};}
   window.microphonMixerDiagnostics=function(){return{playing:playing,position:currentPos(),sourceGeneration:sourceGeneration,loadedTracks:loadedCount(),activeSources:graph?graph.sources.length:0,tracksSynchronized:!graph||graph.sources.length===loadedCount(),projectDuration:duration(),listenRoute:listenRoute,mixMeterBeforeMastering:true,vuReferenceDbfs:VU_REFERENCE_DBFS,peakHoldMs:700,localFilesOnly:true};};
