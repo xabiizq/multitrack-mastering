@@ -45,18 +45,20 @@
 
   function presenceValues(value) {
     var amount = Math.max(-1, Math.min(1, Number(value) || 0)), soft = Math.max(0, -amount), forward = Math.max(0, amount);
-    return { eq: amount * 2.1, attack: forward * 0.095, threshold: soft ? -20 : 0, ratio: 1 + soft * 0.65, makeup: dbToGain(-forward * 0.65 + soft * 0.2) };
+    return { eq: forward * 4.5 - soft * 3.2, attack: forward * 0.26, threshold: -12 - soft * 12, ratio: 1 + soft * 1.2, makeup: dbToGain(-forward + soft * 0.35) };
   }
 
-  /* A broad presence contour plus a very low, filtered parallel path suggests articulation;
-     the negative half gently rounds attacks. All paths are exact unity/bypass at zero. */
+  /* A broad presence contour plus a band-limited, softly saturated parallel path adds
+     articulation without hyping hiss. The negative half gently rounds attacks. At zero
+     the EQ and parallel gain are zero, the compressor ratio is 1:1, and makeup is unity. */
   function buildPresence(ctx, input, value) {
     var n = {}, v = presenceValues(value);
-    n.eq = ctx.createBiquadFilter(); n.eq.type = 'peaking'; n.eq.frequency.value = 3300; n.eq.Q.value = 0.55; n.eq.gain.value = v.eq;
+    n.eq = ctx.createBiquadFilter(); n.eq.type = 'peaking'; n.eq.frequency.value = 3100; n.eq.Q.value = 0.58; n.eq.gain.value = v.eq;
     n.round = ctx.createDynamicsCompressor(); n.round.threshold.value = v.threshold; n.round.knee.value = 14; n.round.ratio.value = v.ratio; n.round.attack.value = 0.004; n.round.release.value = 0.12;
-    n.attackFilter = ctx.createBiquadFilter(); n.attackFilter.type = 'highpass'; n.attackFilter.frequency.value = 1900; n.attackFilter.Q.value = 0.45;
+    n.attackFilter = ctx.createBiquadFilter(); n.attackFilter.type = 'bandpass'; n.attackFilter.frequency.value = 3200; n.attackFilter.Q.value = 0.7;
+    n.attackSaturation = ctx.createWaveShaper(); n.attackSaturation.curve = makeCurve(1.14); n.attackSaturation.oversample = '2x';
     n.attackGain = ctx.createGain(); n.attackGain.gain.value = v.attack; n.makeup = ctx.createGain(); n.makeup.gain.value = v.makeup;
-    input.connect(n.eq); n.eq.connect(n.round); n.round.connect(n.makeup); n.eq.connect(n.attackFilter); n.attackFilter.connect(n.attackGain); n.attackGain.connect(n.makeup); n.output = n.makeup;
+    input.connect(n.eq); n.eq.connect(n.round); n.round.connect(n.makeup); n.eq.connect(n.attackFilter); n.attackFilter.connect(n.attackSaturation); n.attackSaturation.connect(n.attackGain); n.attackGain.connect(n.makeup); n.output = n.makeup;
     return n;
   }
 
@@ -189,6 +191,17 @@
 
   function matrixSample(left,right,width){var mid=(left+right)*.5,side=(left-right)*.5;return{left:mid+side*width,right:mid-side*width,mid:mid,side:side*width};}
   window.microphonMixerDiagnostics=function(){return{playing:playing,position:currentPos(),sourceGeneration:sourceGeneration,loadedTracks:loadedCount(),activeSources:graph?graph.sources.length:0,tracksSynchronized:!graph||graph.sources.length===loadedCount(),projectDuration:duration(),listenRoute:listenRoute,mixMeterBeforeMastering:true,vuReferenceDbfs:VU_REFERENCE_DBFS,peakHoldMs:700,localFilesOnly:true};};
+
+  /* Browser-console check: exercises buildPresence itself in OfflineAudioContext and
+     reports level, peak, approximate 2.5--4 kHz energy, and sample difference from zero. */
+  window.microphonPresenceDiagnostic=function(){
+    var sampleRate=44100,length=sampleRate/2,frequencies=[2500,3000,3500,4000];
+    function testSignal(ctx){var b=ctx.createBuffer(1,length,sampleRate),d=b.getChannelData(0),i;for(i=0;i<length;i+=1){d[i]=0.11*Math.sin(2*Math.PI*700*i/sampleRate)+0.09*Math.sin(2*Math.PI*3100*i/sampleRate);if(i%2205<5)d[i]+=(1-i%2205/5)*0.55;}return b;}
+    function renderPresence(value){var ctx=new OfflineAudioContext(1,length,sampleRate),source=ctx.createBufferSource(),presence;source.buffer=testSignal(ctx);presence=buildPresence(ctx,source,value);presence.output.connect(ctx.destination);source.start();return ctx.startRendering();}
+    function metrics(buffer){var d=buffer.getChannelData(0),sum=0,peak=0,band=0,i,k,re,im,a;for(i=0;i<d.length;i+=1){a=Math.abs(d[i]);sum+=d[i]*d[i];if(a>peak)peak=a;}for(k=0;k<frequencies.length;k+=1){re=0;im=0;for(i=0;i<d.length;i+=1){a=2*Math.PI*frequencies[k]*i/sampleRate;re+=d[i]*Math.cos(a);im-=d[i]*Math.sin(a);}band+=(re*re+im*im)/(d.length*d.length);}return{rms:Math.sqrt(sum/d.length),peak:peak,presenceBandEnergy:band};}
+    function difference(a,b){var x=a.getChannelData(0),y=b.getChannelData(0),sum=0,i,d;for(i=0;i<x.length;i+=1){d=x[i]-y[i];sum+=d*d;}return Math.sqrt(sum/x.length);}
+    return Promise.all([renderPresence(0),renderPresence(1),renderPresence(-1)]).then(function(results){var positiveDifference=difference(results[0],results[1]),negativeDifference=difference(results[0],results[2]);return{neutral:metrics(results[0]),present:metrics(results[1]),soft:metrics(results[2]),presentDifferenceRms:positiveDifference,softDifferenceRms:negativeDifference,presentIsDifferent:positiveDifference>1e-5,softIsDifferent:negativeDifference>1e-5,parameters:{neutral:presenceValues(0),present:presenceValues(1),soft:presenceValues(-1)}};});
+  };
 
   function boot(){if(!AudioContextClass){byId('loadStatus').textContent='Web Audio API no disponible.';return;}audioContext=new AudioContextClass();trackDefs.forEach(addChannel);byId('mixMeters').innerHTML=meterHtml('mix-l','LEFT')+meterHtml('mix-r','RIGHT')+'<small>Pre-mastering · 0 VU = −18 dBFS</small>';byId('vinylMeters').innerHTML=meterHtml('vinyl-l','VINYL L')+meterHtml('vinyl-r','VINYL R');byId('digitalMeters').innerHTML=meterHtml('digital-l','DIGITAL L')+meterHtml('digital-r','DIGITAL R');bindControls();document.querySelectorAll('[data-route]').forEach(function(b){b.onclick=function(){selectRoute(this.getAttribute('data-route'));};});document.querySelectorAll('[data-render]').forEach(function(b){b.onclick=function(){render(this.getAttribute('data-render'));};});selectRoute('mix');byId('playBtn').onclick=play;byId('stopBtn').onclick=stop;byId('position').oninput=function(){seek(parseFloat(this.value));};byId('saveBtn').onclick=save;byId('restoreBtn').onclick=restore;byId('defaultsBtn').onclick=initial;updateAvailability();}
   boot();
